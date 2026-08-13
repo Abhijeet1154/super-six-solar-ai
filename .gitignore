@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Streamlit/runtime data
+inspection_history.csv
+inspection_history_old_*.csv
+saved_images/
+
+# Training/testing output
+runs/
+
+# Agent/local files
+.agents/
