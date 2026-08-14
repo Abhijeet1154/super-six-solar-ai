@@ -1,11 +1,12 @@
-import streamlit as st
+import os
+from datetime import datetime
+
 import cv2
 import numpy as np
 import pandas as pd
+import streamlit as st
 from PIL import Image
 from ultralytics import YOLO
-import os
-from datetime import datetime
 
 
 # ============================================================
@@ -13,824 +14,941 @@ from datetime import datetime
 # ============================================================
 
 st.set_page_config(
-    page_title="Solar Vision AI | Super Six",
+    page_title="Super Six | Solar Vision AI",
     page_icon="☀️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed",
 )
 
 
 # ============================================================
-# GLOBAL CSS
+# FILES
+# ============================================================
+
+CSV_FILE = "inspection_history.csv"
+IMAGE_DIR = "saved_images"
+LOGO_FILE = "logo.png"
+
+MODEL_FILES = {
+    "dust": "dust_model.pt",
+    "crack": "crack_model.pt",
+    "hotspot": "hotspot_model.pt",
+}
+
+
+# ============================================================
+# DARK FUTURISTIC CSS
 # ============================================================
 
 st.markdown(
     """
 <style>
 
-:root {
-    --bg: #03050a;
-    --card: #0b1220;
-    --border: rgba(255,255,255,0.10);
-
-    --cyan: #00e5ff;
-    --blue: #4f8cff;
-    --green: #00ff9d;
-    --yellow: #ffd43b;
-    --orange: #ff9f1c;
-    --red: #ff3864;
-    --purple: #a855f7;
+html, body, [class*="css"] {
+    font-family: Inter, Arial, sans-serif;
 }
-
-
-/* =========================================================
-   MAIN APP
-   ========================================================= */
 
 .stApp {
     background:
         radial-gradient(
-            circle at 10% 10%,
-            rgba(0,229,255,0.09),
+            circle at 8% 10%,
+            rgba(0, 229, 255, 0.10),
             transparent 25%
         ),
         radial-gradient(
-            circle at 90% 15%,
-            rgba(168,85,247,0.09),
-            transparent 25%
+            circle at 92% 12%,
+            rgba(255, 176, 0, 0.09),
+            transparent 24%
         ),
         radial-gradient(
-            circle at 50% 90%,
-            rgba(0,255,157,0.05),
+            circle at 50% 100%,
+            rgba(0, 255, 170, 0.06),
             transparent 30%
         ),
-        #03050a;
+        #02050A;
 
-    color: #f8fafc;
-
-    font-family:
-        Inter,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-
-    background-attachment: fixed;
+    color: #F5F7FA;
 }
 
-
-/* =========================================================
-   ANIMATED GRID
-   ========================================================= */
+/* Background grid */
 
 .stApp::before {
     content: "";
-
     position: fixed;
     inset: 0;
 
     background-image:
         linear-gradient(
-            rgba(0,229,255,0.035) 1px,
+            rgba(0, 229, 255, 0.025) 1px,
             transparent 1px
         ),
         linear-gradient(
             90deg,
-            rgba(0,229,255,0.035) 1px,
+            rgba(0, 229, 255, 0.025) 1px,
             transparent 1px
         );
 
-    background-size: 45px 45px;
+    background-size: 36px 36px;
 
     pointer-events: none;
-
-    animation: gridMove 18s linear infinite;
-
     z-index: 0;
 }
 
-@keyframes gridMove {
+/* Hide Streamlit branding */
 
-    from {
-        transform: translateY(0);
-    }
+#MainMenu {
+    visibility: hidden;
+}
 
-    to {
-        transform: translateY(45px);
-    }
+footer {
+    visibility: hidden;
+}
+
+[data-testid="stToolbar"] {
+    visibility: hidden;
+}
+
+[data-testid="stDecoration"] {
+    display: none;
+}
+
+/* Main container */
+
+.block-container {
+    max-width: 1450px;
+    padding-top: 1.2rem;
+    padding-bottom: 4rem;
+    position: relative;
+    z-index: 1;
 }
 
 
-/* =========================================================
-   SIDEBAR
-   ========================================================= */
+/* ============================================================
+   SUPER SIX BRAND HEADER
+   ============================================================ */
 
-[data-testid="stSidebar"] {
-
+.super-header {
+    min-height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 18px;
+    margin-bottom: 8px;
+    border: 1px solid #12334B;
+    border-radius: 20px;
     background:
-        linear-gradient(
-            180deg,
-            #050912 0%,
-            #02040a 100%
-        ) !important;
-
-    border-right:
-        1px solid rgba(0,229,255,0.15);
-
-    box-shadow:
-        10px 0 40px rgba(0,0,0,0.35);
+        radial-gradient(circle at 12% 50%, rgba(0,229,255,.10), transparent 25%),
+        linear-gradient(135deg, rgba(4,14,24,.98), rgba(2,7,13,.98));
+    box-shadow: 0 12px 40px rgba(0,0,0,.28), inset 0 0 35px rgba(0,229,255,.025);
 }
+.super-brand-wrap { display:flex; align-items:center; gap:14px; }
+.super-brand-copy { display:flex; flex-direction:column; }
+.super-brand-title { font-size:26px; line-height:1; font-weight:950; letter-spacing:1.2px; color:#F4F8FF; }
+.super-brand-title span { color:#00E5FF; text-shadow:0 0 18px rgba(0,229,255,.35); }
+.super-brand-subtitle { margin-top:6px; color:#6F879D; font-size:10px; letter-spacing:3px; font-weight:800; }
+.super-header-right { display:flex; align-items:center; gap:16px; }
+.sun-orb {
+    width:42px; height:42px; display:flex; align-items:center; justify-content:center;
+    border-radius:50%; border:1px solid rgba(255,176,0,.45); color:#FFB000; font-size:22px;
+    box-shadow:0 0 24px rgba(255,176,0,.16); animation:sunPulse 3s ease-in-out infinite;
+}
+@keyframes sunPulse {
+    0%,100% { box-shadow:0 0 18px rgba(255,176,0,.12); }
+    50% { box-shadow:0 0 32px rgba(255,176,0,.32); }
+}
+.top-marker {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 4px 13px; border-bottom:1px solid #102338; margin-bottom:14px;
+}
+.top-marker-left { color:#6E8095; font-size:10px; letter-spacing:2px; font-weight:800; }
+.top-marker-right { color:#00FFB0; font-size:10px; font-weight:800; }
+.logo-fallback {
+    width:74px; height:74px; border-radius:18px; display:flex; align-items:center;
+    justify-content:center; font-size:35px; border:1px solid #00E5FF; background:#06131F;
+}
+.visual-image-card {
+    border:1px solid #12435C; border-radius:16px; padding:6px;
+    background:linear-gradient(145deg,#07121E,#03080E);
+    box-shadow:0 0 25px rgba(0,229,255,.06); overflow:hidden; min-height:0;
+}
+.visual-image-card img { width:100% !important; border-radius:11px; object-fit:contain; }
+[data-testid="stImage"] img { border-radius:14px !important; border:1px solid #12435C; }
 
+/* ============================================================
+   TOP HEADER
+   ============================================================ */
 
-/* =========================================================
-   HEADINGS
-   ========================================================= */
+.top-header {
+    min-height: 86px;
 
-h1 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 
-    font-size: 3rem !important;
+    padding: 12px 20px;
 
-    font-weight: 850 !important;
+    border: 1px solid #172538;
+
+    border-radius: 20px;
 
     background:
         linear-gradient(
-            90deg,
-            #ffffff,
-            #00e5ff,
-            #00ff9d
+            135deg,
+            rgba(8, 16, 27, 0.96),
+            rgba(3, 7, 13, 0.96)
         );
 
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    box-shadow:
+        0 15px 45px rgba(0, 0, 0, 0.35);
 
-    letter-spacing: -0.04em;
-
-    text-shadow:
-        0 0 30px rgba(0,229,255,0.18);
+    margin-bottom: 22px;
 }
 
-h2 {
-    font-weight: 750 !important;
+.brand-title {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    color: white;
 }
 
-h3 {
-    font-weight: 700 !important;
+.brand-subtitle {
+    font-size: 11px;
+    color: #728096;
+    letter-spacing: 2px;
+    margin-top: 3px;
+}
+
+.online-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 9px 15px;
+
+    border-radius: 999px;
+
+    color: #00FFB0;
+
+    border: 1px solid rgba(0,255,176,0.35);
+
+    background: rgba(0,255,176,0.05);
+
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.online-dot {
+    width: 8px;
+    height: 8px;
+
+    border-radius: 50%;
+
+    background: #00FFB0;
+
+    box-shadow: 0 0 12px #00FFB0;
+
+    animation: pulseDot 1.5s infinite;
+}
+
+@keyframes pulseDot {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.35;
+        transform: scale(0.7);
+    }
 }
 
 
-/* =========================================================
+/* ============================================================
    HERO
-   ========================================================= */
+   ============================================================ */
 
-.hero {
-
+.hero-card {
     position: relative;
+    overflow: hidden;
 
-    padding: 38px;
-
-    margin-bottom: 25px;
+    padding: 35px 25px;
 
     border-radius: 24px;
 
-    overflow: hidden;
+    border: 1px solid rgba(0,229,255,0.22);
 
     background:
-        radial-gradient(
-            circle at 88% 50%,
-            rgba(255,193,7,0.20),
-            transparent 24%
-        ),
         linear-gradient(
             135deg,
-            rgba(15,25,42,0.96),
-            rgba(3,7,14,0.94)
+            rgba(0,229,255,0.055),
+            rgba(255,176,0,0.035),
+            rgba(5,9,16,0.96)
         );
 
-    border:
-        1px solid rgba(0,229,255,0.18);
+    text-align: center;
 
-    box-shadow:
-        0 20px 70px rgba(0,0,0,0.45);
+    margin-bottom: 24px;
 }
 
-.hero::before {
-
+.hero-card::after {
     content: "";
 
     position: absolute;
 
-    width: 250px;
-    height: 250px;
-
-    right: 7%;
-    top: -80px;
+    width: 320px;
+    height: 320px;
 
     border-radius: 50%;
 
-    background:
-        radial-gradient(
-            circle,
-            #ffd43b 0%,
-            #ff9f1c 35%,
-            rgba(255,159,28,0.08) 65%,
-            transparent 70%
-        );
+    background: rgba(255,176,0,0.12);
 
-    animation:
-        solarPulse 4s ease-in-out infinite;
+    filter: blur(80px);
+
+    right: -120px;
+    top: -180px;
+
+    animation: sunGlow 5s ease-in-out infinite;
 }
 
-@keyframes solarPulse {
-
-    0%,100% {
-        transform: scale(0.95);
-        opacity: 0.7;
+@keyframes sunGlow {
+    0%, 100% {
+        opacity: 0.35;
+        transform: scale(0.9);
     }
 
     50% {
-        transform: scale(1.08);
-        opacity: 1;
+        opacity: 0.8;
+        transform: scale(1.1);
     }
 }
 
 .hero-title {
+    font-size: clamp(32px, 5vw, 60px);
 
-    position: relative;
+    font-weight: 900;
 
-    font-size: 42px;
+    letter-spacing: -2px;
 
-    font-weight: 850;
+    background:
+        linear-gradient(
+            90deg,
+            #FFFFFF,
+            #00E5FF,
+            #FFFFFF,
+            #FFB000
+        );
 
-    letter-spacing: -1.5px;
+    background-size: 300% auto;
 
-    margin-top: 15px;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 
-    color: white;
+    animation: gradientMove 6s linear infinite;
+}
 
-    z-index: 2;
+@keyframes gradientMove {
+    0% {
+        background-position: 0% center;
+    }
+
+    100% {
+        background-position: 300% center;
+    }
 }
 
 .hero-subtitle {
-
-    position: relative;
-
-    color: #94a3b8;
-
-    font-size: 16px;
-
+    color: #8995A7;
+    font-size: 15px;
     margin-top: 8px;
-
-    z-index: 2;
 }
 
+.hero-pills {
+    margin-top: 20px;
 
-/* =========================================================
-   STATUS
-   ========================================================= */
+    display: flex;
+    justify-content: center;
 
-.status-online {
+    gap: 10px;
 
-    display: inline-flex;
+    flex-wrap: wrap;
+}
 
-    align-items: center;
-
-    gap: 8px;
-
+.hero-pill {
     padding: 7px 14px;
 
     border-radius: 999px;
 
-    background:
-        rgba(0,255,157,0.08);
+    border: 1px solid #20344A;
 
-    border:
-        1px solid rgba(0,255,157,0.35);
+    background: rgba(255,255,255,0.025);
 
-    color: #00ff9d;
+    color: #9AA7B8;
 
-    font-size: 12px;
+    font-size: 11px;
+}
 
+
+/* ============================================================
+   SECTION TITLES
+   ============================================================ */
+
+.section-title {
+    font-size: 29px;
     font-weight: 800;
-
-    letter-spacing: 0.05em;
+    color: white;
+    margin-top: 12px;
 }
 
-.status-dot {
-
-    width: 8px;
-    height: 8px;
-
-    background: #00ff9d;
-
-    border-radius: 50%;
-
-    box-shadow:
-        0 0 8px #00ff9d;
-
-    animation:
-        pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-
-    0% {
-        transform: scale(0.8);
-        opacity: 0.6;
-    }
-
-    50% {
-        transform: scale(1.2);
-        opacity: 1;
-    }
-
-    100% {
-        transform: scale(0.8);
-        opacity: 0.6;
-    }
+.section-subtitle {
+    color: #768397;
+    margin-bottom: 22px;
 }
 
 
-/* =========================================================
-   CARDS
-   ========================================================= */
-
-.metric-container,
-.ai-card,
-.about-card,
-.report-card,
-.report-card-warning {
-
-    background:
-        linear-gradient(
-            145deg,
-            rgba(20,30,48,0.86),
-            rgba(5,10,18,0.78)
-        );
-
-    border:
-        1px solid rgba(255,255,255,0.09);
-
-    border-radius: 18px;
-
-    padding: 22px;
-
-    backdrop-filter: blur(18px);
-
-    box-shadow:
-        0 10px 40px rgba(0,0,0,0.35),
-        inset 0 1px rgba(255,255,255,0.05);
-
-    transition:
-        transform 0.25s ease,
-        border 0.25s ease,
-        box-shadow 0.25s ease;
-}
-
-.metric-container:hover,
-.ai-card:hover,
-.about-card:hover {
-
-    transform: translateY(-4px);
-
-    border-color:
-        rgba(0,229,255,0.42);
-
-    box-shadow:
-        0 15px 50px rgba(0,229,255,0.12);
-}
-
-
-/* =========================================================
-   BUTTON
-   ========================================================= */
-
-.stButton > button {
-
-    border-radius: 12px !important;
-
-    border:
-        1px solid rgba(0,229,255,0.45) !important;
-
-    background:
-        linear-gradient(
-            135deg,
-            #00e5ff,
-            #4f8cff
-        ) !important;
-
-    color: #001018 !important;
-
-    font-weight: 800 !important;
-
-    padding: 10px 22px !important;
-
-    box-shadow:
-        0 0 20px rgba(0,229,255,0.15);
-
-    transition:
-        all 0.25s ease;
-}
-
-.stButton > button:hover {
-
-    transform: translateY(-2px);
-
-    box-shadow:
-        0 0 30px rgba(0,229,255,0.35);
-
-    border-color:
-        #00e5ff !important;
-}
-
-
-/* =========================================================
+/* ============================================================
    TABS
-   ========================================================= */
+   ============================================================ */
 
 .stTabs [data-baseweb="tab-list"] {
+    background: rgba(5,10,17,0.88);
+
+    border: 1px solid #172538;
+
+    border-radius: 15px;
+
+    padding: 5px;
 
     gap: 5px;
 
-    background:
-        rgba(5,10,18,0.75);
-
-    border:
-        1px solid rgba(255,255,255,0.06);
-
-    border-radius: 14px;
-
-    padding: 5px;
+    margin-bottom: 25px;
 }
 
 .stTabs [data-baseweb="tab"] {
+    color: #7D899B;
 
     border-radius: 10px;
 
-    color: #94a3b8;
+    padding: 11px 20px;
 
-    padding: 12px 20px;
+    font-weight: 700;
+}
 
-    transition: all 0.2s ease;
+.stTabs [data-baseweb="tab"]:hover {
+    color: white;
+    background: rgba(0,229,255,0.05);
 }
 
 .stTabs [aria-selected="true"] {
-
     color: white !important;
 
     background:
         linear-gradient(
             135deg,
-            rgba(0,229,255,0.15),
-            rgba(79,140,255,0.12)
+            rgba(0,229,255,0.14),
+            rgba(255,176,0,0.08)
         );
+
+    border-bottom: 2px solid #00E5FF;
 }
 
 
-/* =========================================================
-   IMAGE
-   ========================================================= */
+/* ============================================================
+   CONTROL CARD
+   ============================================================ */
 
-[data-testid="stImage"] {
+.control-card {
+    background:
+        linear-gradient(
+            145deg,
+            rgba(10,18,30,0.98),
+            rgba(4,8,14,0.98)
+        );
 
-    border-radius: 16px;
+    border: 1px solid #1B2A3C;
 
-    overflow: hidden;
+    border-radius: 20px;
 
-    border:
-        1px solid rgba(0,229,255,0.15);
+    padding: 22px;
 
-    box-shadow:
-        0 10px 45px rgba(0,0,0,0.4);
+    margin-bottom: 22px;
+}
+
+.stSelectbox > div > div {
+    background: #080F18 !important;
+
+    color: white !important;
+
+    border: 1px solid #24364B !important;
+
+    border-radius: 11px !important;
+}
+
+[data-testid="stFileUploader"] {
+    background:
+        linear-gradient(
+            135deg,
+            rgba(0,229,255,0.035),
+            rgba(255,176,0,0.025)
+        );
+
+    border: 1px dashed rgba(0,229,255,0.45);
+
+    border-radius: 15px;
+
+    padding: 10px;
 }
 
 
-/* =========================================================
-   FILE UPLOADER
-   ========================================================= */
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 
-[data-testid="stFileUploader"] section {
+.stButton > button {
+    min-height: 48px;
+
+    border-radius: 12px !important;
+
+    border: 1px solid #00E5FF !important;
 
     background:
         linear-gradient(
             135deg,
-            rgba(0,229,255,0.04),
-            rgba(79,140,255,0.04)
-        );
+            #009FEF,
+            #0066FF
+        ) !important;
 
-    border:
-        1px dashed rgba(0,229,255,0.35);
+    color: white !important;
 
-    border-radius: 14px;
-
-    transition: 0.3s ease;
-}
-
-[data-testid="stFileUploader"] section:hover {
-
-    border-color:
-        #00e5ff;
+    font-weight: 800 !important;
 
     box-shadow:
-        0 0 25px rgba(0,229,255,0.10);
+        0 0 25px rgba(0,229,255,0.15);
+
+    transition: all 0.25s ease !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 0 35px rgba(0,229,255,0.35);
+
+    border-color: white !important;
 }
 
 
-/* =========================================================
-   MODEL STATUS
-   ========================================================= */
+/* ============================================================
+   IMAGE CARD
+   ============================================================ */
 
-.model-pill {
+.image-title {
+    color: #AEB8C7;
 
-    display: flex;
-
-    justify-content: space-between;
-
-    align-items: center;
-
-    padding: 11px 14px;
-
-    margin: 7px 0;
-
-    border-radius: 10px;
-
-    background:
-        rgba(255,255,255,0.035);
-
-    border:
-        1px solid rgba(255,255,255,0.06);
-
-    color: #e2e8f0;
-}
-
-.model-online {
-
-    color: #00ff9d;
-
-    font-size: 11px;
+    font-size: 13px;
 
     font-weight: 800;
+
+    letter-spacing: 0.7px;
+
+    margin-bottom: 8px;
+}
+
+.image-frame {
+    background: #050A11;
+
+    border: 1px solid #1D3044;
+
+    border-radius: 17px;
+
+    padding: 8px;
+
+    overflow: hidden;
 }
 
 
-/* =========================================================
-   SCANNER
-   ========================================================= */
+/* ============================================================
+   METRICS
+   ============================================================ */
 
-.scan-box {
+.metric-grid {
+    display: grid;
 
+    grid-template-columns:
+        repeat(4, 1fr);
+
+    gap: 14px;
+
+    margin-top: 20px;
+}
+
+.metric-card {
     position: relative;
 
     overflow: hidden;
 
-    border-radius: 16px;
-
-    border:
-        1px solid rgba(0,229,255,0.35);
-
-    background:
-        #02060d;
-}
-
-.scan-box::after {
-
-    content: "";
-
-    position: absolute;
-
-    left: 0;
-    right: 0;
-
-    height: 3px;
-
     background:
         linear-gradient(
-            90deg,
-            transparent,
-            #00e5ff,
-            #00ff9d,
-            transparent
+            145deg,
+            #0D1723,
+            #060A10
+        );
+
+    border: 1px solid #1C2C40;
+
+    border-radius: 16px;
+
+    padding: 24px;
+
+    transition: all 0.25s ease;
+}
+
+.metric-card:hover {
+    transform: translateY(-4px);
+
+    border-color: rgba(0,229,255,0.4);
+}
+
+.metric-label {
+    color: #78869A;
+
+    font-size: 11px;
+
+    letter-spacing: 1px;
+
+    text-transform: uppercase;
+}
+
+.metric-value {
+    font-size: 40px;
+
+    font-weight: 900;
+
+    margin-top: 6px;
+
+    color: white;
+}
+
+.metric-small {
+    color: #59677A;
+
+    font-size: 11px;
+
+    margin-top: 3px;
+}
+
+
+/* ============================================================
+   REPORT CARDS
+   ============================================================ */
+
+.report-card {
+    background:
+        linear-gradient(
+            145deg,
+            rgba(10,17,28,0.98),
+            rgba(4,8,14,0.98)
+        );
+
+    border: 1px solid #1D2B3D;
+
+    border-radius: 18px;
+
+    padding: 22px;
+
+    margin-top: 18px;
+}
+
+.good {
+    border-left: 4px solid #00FFB0;
+}
+
+.warning {
+    border-left: 4px solid #FFB000;
+}
+
+.danger {
+    border-left: 4px solid #FF4757;
+}
+
+
+/* ============================================================
+   HEALTH
+   ============================================================ */
+
+.health-box {
+    text-align: center;
+
+    padding: 10px;
+}
+
+.health-circle {
+    width: 150px;
+    height: 150px;
+
+    margin: 15px auto;
+
+    border-radius: 50%;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    background:
+        conic-gradient(
+            #00FFB0 0deg,
+            #00E5FF 180deg,
+            #FFB000 290deg,
+            #FF4757 360deg
         );
 
     box-shadow:
-        0 0 20px #00e5ff;
-
-    animation:
-        scanning 2.2s linear infinite;
+        0 0 35px rgba(0,229,255,0.18);
 }
 
-@keyframes scanning {
+.health-inner {
+    width: 120px;
+    height: 120px;
 
-    0% {
-        top: 0;
-        opacity: 0;
-    }
+    border-radius: 50%;
 
-    10% {
-        opacity: 1;
-    }
+    background: #070C13;
 
-    90% {
-        opacity: 1;
-    }
+    display: flex;
 
-    100% {
-        top: 100%;
-        opacity: 0;
-    }
+    align-items: center;
+    justify-content: center;
+
+    flex-direction: column;
+}
+
+.health-score {
+    font-size: 32px;
+    font-weight: 900;
+}
+
+.health-label {
+    font-size: 10px;
+    color: #738096;
 }
 
 
-/* =========================================================
-   EXPANDERS
-   ========================================================= */
+/* ============================================================
+   ABOUT
+   ============================================================ */
 
-[data-testid="stExpander"] {
-
+.about-card {
     background:
-        rgba(10,16,27,0.75);
+        linear-gradient(
+            145deg,
+            rgba(10,18,30,0.98),
+            rgba(4,8,14,0.98)
+        );
 
-    border:
-        1px solid rgba(255,255,255,0.08);
+    border: 1px solid #1D2B3D;
 
-    border-radius: 14px;
+    border-radius: 20px;
 
-    overflow: hidden;
+    padding: 25px;
+
+    margin-bottom: 18px;
 }
 
+.team-grid {
+    display: grid;
 
-/* =========================================================
-   DIVIDER
-   ========================================================= */
+    grid-template-columns:
+        repeat(3, 1fr);
 
-hr {
+    gap: 12px;
 
-    border: none !important;
+    margin-top: 15px;
+}
 
-    height: 1px;
+.team-member {
+    text-align: center;
+
+    padding: 16px 10px;
+
+    border-radius: 13px;
+
+    border: 1px solid #203147;
+
+    background: rgba(255,255,255,0.02);
+
+    color: #D9E0EA;
+
+    transition: all 0.25s ease;
+}
+
+.team-member:hover {
+    transform: translateY(-3px);
+
+    border-color: #00E5FF;
+
+    box-shadow:
+        0 0 22px rgba(0,229,255,0.08);
+}
+
+.lead-card {
+    text-align: center;
+
+    border: 1px solid rgba(255,176,0,0.45);
 
     background:
         linear-gradient(
-            90deg,
-            transparent,
-            rgba(0,229,255,0.35),
-            transparent
-        );
-}
-
-
-/* =========================================================
-   SCROLLBAR
-   ========================================================= */
-
-::-webkit-scrollbar {
-    width: 7px;
-}
-
-::-webkit-scrollbar-track {
-    background: #02040a;
-}
-
-::-webkit-scrollbar-thumb {
-
-    background:
-        linear-gradient(
-            #00e5ff,
-            #4f8cff
+            135deg,
+            rgba(255,176,0,0.07),
+            rgba(0,229,255,0.04)
         );
 
-    border-radius: 10px;
+    border-radius: 18px;
+
+    padding: 20px;
+
+    margin-top: 18px;
+}
+
+
+/* ============================================================
+   HISTORY
+   ============================================================ */
+
+.history-item {
+    background: #080E17;
+
+    border: 1px solid #1C2B3E;
+
+    border-radius: 15px;
+
+    padding: 18px;
+
+    margin-bottom: 12px;
+}
+
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+
+.footer {
+    text-align: center;
+
+    color: #5F6C7E;
+
+    font-size: 12px;
+
+    padding-top: 35px;
+
+    margin-top: 45px;
+
+    border-top: 1px solid #172131;
+}
+
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+
+@media (max-width: 900px) {
+
+    .metric-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .team-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+
+    .metric-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .team-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .top-header {
+        padding: 10px;
+    }
+
+    .hero-title {
+        font-size: 34px;
+    }
 }
 
 </style>
 """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# CONSTANTS
+# STORAGE
 # ============================================================
 
-CSV_FILE = "inspection_history.csv"
-IMAGE_DIR = "saved_images"
+def initialize_storage():
+    os.makedirs(IMAGE_DIR, exist_ok=True)
 
-EXPECTED_COLUMNS = [
-    "Timestamp",
-    "Filename",
-    "Inspection_Mode",
-    "Panel_Status",
-    "Dust_Status",
-    "Crack_Status",
-    "Hotspot_Status",
-    "Health_Score",
-    "Priority",
-    "Detections_Count",
-    "Estimated_Loss_Pct",
-    "Saved_Image_Path"
-]
+    if not os.path.exists(CSV_FILE):
+        columns = [
+            "Timestamp",
+            "Filename",
+            "Inspection_Mode",
+            "Dust_Status",
+            "Crack_Status",
+            "Hotspot_Status",
+            "Health_Score",
+            "Priority",
+            "Detections_Count",
+            "Estimated_Loss_Pct",
+            "Saved_Image_Path",
+        ]
 
-
-# ============================================================
-# DATA STORAGE
-# ============================================================
-
-def init_data_storage():
-
-    if not os.path.exists(IMAGE_DIR):
-        os.makedirs(IMAGE_DIR)
-
-    if os.path.exists(CSV_FILE):
-
-        try:
-
-            existing_df = pd.read_csv(
-                CSV_FILE,
-                nrows=1
-            )
-
-            existing_columns = list(
-                existing_df.columns
-            )
-
-            if existing_columns != EXPECTED_COLUMNS:
-
-                backup_name = (
-                    f"inspection_history_old_"
-                    f"{int(datetime.now().timestamp())}.csv"
-                )
-
-                os.rename(
-                    CSV_FILE,
-                    backup_name
-                )
-
-                pd.DataFrame(
-                    columns=EXPECTED_COLUMNS
-                ).to_csv(
-                    CSV_FILE,
-                    index=False
-                )
-
-        except Exception:
-
-            pd.DataFrame(
-                columns=EXPECTED_COLUMNS
-            ).to_csv(
-                CSV_FILE,
-                index=False
-            )
-
-    else:
-
-        pd.DataFrame(
-            columns=EXPECTED_COLUMNS
-        ).to_csv(
+        pd.DataFrame(columns=columns).to_csv(
             CSV_FILE,
             index=False
         )
 
 
-def save_inspection_record(
-    record_data,
-    image_array
-):
+def save_record(record, image_array):
+
+    os.makedirs(IMAGE_DIR, exist_ok=True)
 
     timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S_%f"
+        "%Y%m%d_%H%M%S"
     )
 
-    safe_filename = (
-        record_data["Filename"]
+    safe_name = (
+        str(record["Filename"])
         .replace(" ", "_")
         .replace("/", "_")
         .replace("\\", "_")
     )
 
-    image_filename = (
-        f"{timestamp}_{safe_filename}"
+    image_name = (
+        f"{timestamp}_{safe_name}"
     )
 
     image_path = os.path.join(
         IMAGE_DIR,
-        image_filename
+        image_name
     )
 
-    Image.fromarray(
-        image_array
-    ).save(image_path)
-
-    record_data["Saved_Image_Path"] = image_path
-
-    df = pd.DataFrame(
-        [record_data],
-        columns=EXPECTED_COLUMNS
+    Image.fromarray(image_array).save(
+        image_path
     )
 
-    df.to_csv(
+    record["Saved_Image_Path"] = image_path
+
+    pd.DataFrame([record]).to_csv(
         CSV_FILE,
         mode="a",
-        header=False,
-        index=False
+        header=not os.path.exists(CSV_FILE),
+        index=False,
     )
 
     st.toast(
@@ -839,1547 +957,1101 @@ def save_inspection_record(
     )
 
 
-init_data_storage()
+initialize_storage()
 
 
 # ============================================================
-# LOAD MODELS
+# MODEL LOADING
 # ============================================================
 
 @st.cache_resource
-def load_all_models():
+def load_models():
 
     loaded = {}
 
-    model_files = {
-        "panel": "panel_detector.pt",
-        "dust": "dust_model.pt",
-        "crack": "crack_model.pt",
-        "hotspot": "hotspot_model.pt"
-    }
-
-    for key, filename in model_files.items():
+    for name, filename in MODEL_FILES.items():
 
         if os.path.exists(filename):
 
             try:
+                loaded[name] = YOLO(filename)
 
-                loaded[key] = YOLO(filename)
+            except Exception as e:
 
-            except Exception as error:
-
-                loaded[key] = None
-
-                print(
-                    f"Error loading {filename}: {error}"
+                st.error(
+                    f"Unable to load {filename}: {e}"
                 )
+
+                loaded[name] = None
 
         else:
 
-            loaded[key] = None
+            loaded[name] = None
 
     return loaded
 
 
-models = load_all_models()
+models = load_models()
 
 
 # ============================================================
-# HELPER FUNCTIONS
+# HEADER
 # ============================================================
 
-def validate_solar_panel(
-    image,
-    loaded_models
-):
+st.html("""
+<div class="super-header">
+    <div class="super-brand-wrap">
+        <div class="super-brand-copy">
+            <div class="super-brand-title">SUPER <span>SIX</span></div>
+            <div class="super-brand-subtitle">SOLAR VISION AI</div>
+        </div>
+    </div>
+    <div class="super-header-right">
+        <div class="online-pill">
+            <span class="online-dot"></span>
+            AI SYSTEM ONLINE
+        </div>
+        <div class="sun-orb">☀</div>
+    </div>
+</div>
+""")
 
-    if loaded_models.get("panel") is not None:
-
-        try:
-
-            results = loaded_models["panel"](
-                image,
-                conf=0.30,
-                verbose=False
-            )
-
-            return (
-                len(results[0].boxes) > 0
-            )
-
-        except Exception:
-            pass
-
-    # Fallback OpenCV validation
-
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    sharpness = cv2.Laplacian(
-        gray,
-        cv2.CV_64F
-    ).var()
-
-    if sharpness < 10:
-        return False
-
-    edges = cv2.Canny(
-        gray,
-        50,
-        150
-    )
-
-    lines = cv2.HoughLinesP(
-        edges,
-        1,
-        np.pi / 180,
-        threshold=80,
-        minLineLength=80,
-        maxLineGap=15
-    )
-
-    return (
-        lines is not None
-        and len(lines) >= 2
-    )
-
-
-def run_model(
-    model,
-    image,
-    confidence
-):
-
-    if model is None:
-        return None
-
-    try:
-
-        result = model(
-            image,
-            conf=confidence,
-            verbose=False
-        )[0]
-
-        return result
-
-    except Exception as error:
-
-        st.error(
-            f"AI model error: {error}"
-        )
-
-        return None
-
-
-def draw_detections(
-    image,
-    result,
-    label,
-    color
-):
-
-    output = image.copy()
-
-    confidences = []
-
-    if result is None:
-        return output, confidences
-
-    if result.boxes is None:
-        return output, confidences
-
-    for box in result.boxes:
-
-        coordinates = (
-            box.xyxy[0]
-            .cpu()
-            .numpy()
-        )
-
-        x1, y1, x2, y2 = map(
-            int,
-            coordinates
-        )
-
-        confidence = float(
-            box.conf[0]
-            .cpu()
-            .numpy()
-        )
-
-        confidences.append(
-            confidence
-        )
-
-        # Bounding box
-        cv2.rectangle(
-            output,
-            (x1, y1),
-            (x2, y2),
-            color,
-            3
-        )
-
-        # Label
-        text = (
-            f"{label} "
-            f"{confidence:.2f}"
-        )
-
-        (tw, th), _ = cv2.getTextSize(
-            text,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            2
-        )
-
-        text_y = max(
-            y1 - 8,
-            th + 8
-        )
-
-        cv2.rectangle(
-            output,
-            (
-                x1,
-                text_y - th - 8
-            ),
-            (
-                x1 + tw + 10,
-                text_y + 2
-            ),
-            color,
-            -1
-        )
-
-        cv2.putText(
-            output,
-            text,
-            (
-                x1 + 5,
-                text_y - 3
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (0, 0, 0),
-            2,
-            cv2.LINE_AA
-        )
-
-    return output, confidences
-
-
-def get_health_score(
-    detections
-):
-
-    if detections == 0:
-        return 100
-
-    return max(
-        0,
-        100 - detections * 15
-    )
-
-
-def get_health_color(
-    score
-):
-
-    if score >= 80:
-        return "#00ff9d"
-
-    if score >= 50:
-        return "#ffd43b"
-
-    return "#ff3864"
-
-
-def get_priority(
-    score
-):
-
-    if score >= 80:
-        return "LOW"
-
-    if score >= 50:
-        return "MEDIUM"
-
-    return "HIGH"
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    # Logo
-    if os.path.exists("logo.png"):
-
-        st.image(
-            "logo.png",
-            width=180
-        )
-
-    elif os.path.exists("logo.jpg"):
-
-        st.image(
-            "logo.jpg",
-            width=180
-        )
-
+# Actual logo in its own centered row so Streamlit cannot clip it.
+logo_left, logo_center, logo_right = st.columns([1, 1, 1])
+with logo_center:
+    if os.path.exists(LOGO_FILE):
+        st.image(LOGO_FILE, width=150)
     else:
+        st.markdown('<div class="logo-fallback">☀️</div>', unsafe_allow_html=True)
 
-        st.html(
-            """
-            <div style="
-                text-align:center;
-                font-size:60px;
-                margin:10px;
-            ">
-                ☀️
-            </div>
-            """
-        )
-
-
-    st.html(
-        """
-        <div style="
-            text-align:center;
-            font-size:23px;
-            font-weight:850;
-            letter-spacing:2px;
-            color:white;
-        ">
-            SOLAR VISION
-        </div>
-
-        <div style="
-            text-align:center;
-            color:#64748b;
-            font-size:10px;
-            letter-spacing:3px;
-            margin-top:4px;
-        ">
-            SUPER SIX • AI INSPECTION
-        </div>
-        """
-    )
-
-
-    st.markdown("---")
-
-
-    # System status
-    st.html(
-        """
-        <div class="status-online">
-            <span class="status-dot"></span>
-            SYSTEM ONLINE
-        </div>
-        """
-    )
-
-
-    st.markdown("### ⚙️ Inspection Control")
-
-
-    inspection_mode = st.selectbox(
-        "Inspection Mode",
-        [
-            "Dust Detection",
-            "Crack Detection",
-            "Hotspot Detection",
-            "Comprehensive Analysis"
-        ]
-    )
-
-
-    if inspection_mode == "Hotspot Detection":
-
-        st.warning(
-            """
-            ⚠️ Thermal Image Required
-
-            Use a thermal / infrared image
-            for accurate hotspot detection.
-            """
-        )
-
-
-    elif inspection_mode == "Comprehensive Analysis":
-
-        st.info(
-            """
-            💡 Comprehensive Mode
-
-            Checks dust, cracks and hotspots.
-            Thermal imagery is recommended
-            for hotspot detection.
-            """
-        )
-
-
-    uploaded_file = st.file_uploader(
-        "📤 Upload Inspection Image",
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
-    )
-
-
-    confidence_threshold = st.slider(
-        "🎯 AI Confidence",
-        min_value=0.05,
-        max_value=1.00,
-        value=0.40,
-        step=0.05
-    )
-
-
-    st.markdown("---")
-
-    st.markdown("### 🧠 AI Model Status")
-
-
-    model_names = {
-        "panel": "☀️ Panel Detector",
-        "dust": "🧹 Dust Detector",
-        "crack": "🔬 Crack Detector",
-        "hotspot": "🔥 Hotspot Detector"
-    }
-
-
-    for key, name in model_names.items():
-
-        if models.get(key) is not None:
-
-            status = (
-                '<span class="model-online">'
-                '● ONLINE'
-                '</span>'
-            )
-
-        else:
-
-            status = (
-                '<span style="'
-                'color:#ff3864;'
-                'font-size:11px;'
-                'font-weight:800;">'
-                '● OFFLINE'
-                '</span>'
-            )
-
-        st.html(
-            f"""
-            <div class="model-pill">
-
-                <span>
-                    {name}
-                </span>
-
-                {status}
-
-            </div>
-            """
-        )
-
-
-    st.markdown("---")
-
-
-    st.html(
-        """
-        <div style="
-            text-align:center;
-            color:#64748b;
-            font-size:11px;
-        ">
-            SUPER SIX • Solar AI Intelligence
-            <br><br>
-            Lead Developer: Abhijeet Singh
-        </div>
-        """
-    )
-
+st.html("""
+<div style="height:1px;background:linear-gradient(90deg,transparent,#00E5FF,#17324B,#FFB000,transparent);
+            margin:0 0 14px 0;"></div>
+""")
 
 # ============================================================
+# NAVIGATION
+# ============================================================
+st.html("""
+<div class="top-marker">
+    <div class="top-marker-left">SUPER SIX • SOLAR VISION AI • HACKATHON</div>
+    <div class="top-marker-right">● AI SYSTEM ONLINE</div>
+</div>
+""")
+
 # TABS
 # ============================================================
 
-tab_dashboard, tab_about, tab_history = st.tabs(
+tab_inspect, tab_history, tab_about = st.tabs(
     [
-        "📊 AI Dashboard",
-        "🚀 About Project",
-        "📁 Inspection History"
+        "🔬 INSPECT",
+        "📁 INSPECTION HISTORY",
+        "ℹ️ ABOUT PROJECT",
     ]
 )
 
 
 # ============================================================
-# DASHBOARD
+# INSPECT
 # ============================================================
 
-with tab_dashboard:
+with tab_inspect:
 
-    st.html(
-        """
-        <div class="hero">
+    # ========================================================
+    # HACKATHON INSPECTION CENTER — 3 COLUMN COMMAND DECK
+    # ========================================================
+    st.html("""
+    <div class="section-title">🔬 AI INSPECTION CENTER <span style="font-size:10px;color:#00FFB0;border:1px solid #00FFB0;padding:4px 8px;border-radius:99px;vertical-align:middle;margin-left:8px;">HACKATHON UI V2</span></div>
+    <div class="section-subtitle">
+        Upload a solar panel image and let Super Six detect soiling,
+        structural cracks and thermal hotspots.
+    </div>
+    """)
 
-            <div class="status-online">
-                <span class="status-dot"></span>
-                AI INSPECTION ENGINE ONLINE
-            </div>
-
-            <div class="hero-title">
-                ☀️ Solar Vision
-            </div>
-
-            <div class="hero-subtitle">
-                Intelligent photovoltaic inspection
-                & predictive maintenance platform
-            </div>
-
-        </div>
-        """
+    # Controls / visual input / project information
+    left_col, center_col, right_col = st.columns(
+        [0.72, 2.15, 1.03], gap="large"
     )
 
-
-    if "analyzed_data" not in st.session_state:
-
-        st.session_state.analyzed_data = None
-
-
-    if "last_filename" not in st.session_state:
-
-        st.session_state.last_filename = None
-
-
-    # ========================================================
-    # UPLOAD
-    # ========================================================
-
-    if uploaded_file is None:
-
-        st.html(
-            """
-            <div class="ai-card"
-                 style="
-                    text-align:center;
-                    padding:65px 30px;
-                 ">
-
-                <div style="
-                    font-size:65px;
-                ">
-                    ☀️
-                </div>
-
-                <div style="
-                    font-size:28px;
-                    font-weight:850;
-                    color:white;
-                    margin-top:15px;
-                ">
-                    Ready for Inspection
-                </div>
-
-                <div style="
-                    color:#64748b;
-                    margin-top:10px;
-                    font-size:14px;
-                ">
-                    Upload a solar panel image
-                    from the sidebar to start
-                    AI-powered inspection.
-                </div>
-
-                <div style="
-                    margin-top:25px;
-                ">
-
-                    <span class="status-online">
-                        🧹 DUST
-                    </span>
-
-                    <span class="status-online">
-                        🔬 CRACKS
-                    </span>
-
-                    <span class="status-online">
-                        🔥 HOTSPOTS
-                    </span>
-
-                </div>
-
+    with left_col:
+        st.html("""
+        <div class="control-card" style="padding:20px;">
+            <div style="color:#00E5FF;font-size:13px;font-weight:800;
+                        letter-spacing:.5px;margin-bottom:10px;">
+                ⚙️ INSPECTION CONTROL
             </div>
-            """
+        </div>
+        """)
+
+        inspection_mode = st.selectbox(
+            "Inspection Mode",
+            [
+                "Dust Detection",
+                "Crack Detection",
+                "Hotspot Detection",
+                "Comprehensive Analysis",
+            ],
+            key="inspection_mode_main",
         )
 
-    else:
-
-        # Reset analysis if new image
-        if (
-            st.session_state.last_filename
-            != uploaded_file.name
-        ):
-
-            st.session_state.last_filename = (
-                uploaded_file.name
-            )
-
-            st.session_state.analyzed_data = None
-
-
-        file_bytes = np.asarray(
-            bytearray(
-                uploaded_file.getvalue()
-            ),
-            dtype=np.uint8
+        confidence_threshold = st.slider(
+            "🎯 AI Confidence Threshold",
+            0.05, 1.00, 0.40, 0.05,
+            key="confidence_main",
         )
 
-
-        original_img = cv2.imdecode(
-            file_bytes,
-            cv2.IMREAD_COLOR
+        uploaded_file = st.file_uploader(
+            "📤 Upload Solar Panel Image",
+            type=["jpg", "jpeg", "png"],
+            key="solar_image_upload",
         )
 
+        if inspection_mode == "Hotspot Detection":
+            st.warning("🔥 Thermal/infrared imagery is recommended for hotspot detection.")
+        elif inspection_mode == "Comprehensive Analysis":
+            st.info("🧠 Runs your trained soiling, crack and hotspot models.")
 
-        if original_img is None:
-
-            st.error(
-                "Unable to read the uploaded image."
-            )
-
-            st.stop()
-
-
-        rgb_img = cv2.cvtColor(
-            original_img,
-            cv2.COLOR_BGR2RGB
-        )
-
-
-        # ====================================================
-        # IMAGE PREVIEW
-        # ====================================================
-
-        col1, col2 = st.columns(
-            2,
-            gap="large"
-        )
-
-
-        with col1:
-
-            st.html(
-                """
-                <div style="
-                    display:flex;
-                    justify-content:space-between;
-                    align-items:center;
-                    margin-bottom:10px;
-                ">
-
-                    <h3 style="
-                        margin:0;
-                        color:white;
-                    ">
-                        📸 Input Frame
-                    </h3>
-
-                    <span class="status-online">
-                        ORIGINAL
-                    </span>
-
+        if uploaded_file is not None:
+            st.html(f"""
+            <div class="mini-file-card">
+                <div style="font-size:11px;color:#6F8299;">INPUT IMAGE</div>
+                <div style="font-weight:800;color:#EAF2FF;margin-top:4px;
+                            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                    {uploaded_file.name}
                 </div>
-                """
-            )
+            </div>
+            """)
 
-            st.image(
-                rgb_img,
-                use_container_width=True
-            )
+        st.html("""
+        <div style="margin-top:18px;padding:14px;border-radius:14px;
+                    border:1px solid #17324A;background:#06111C;">
+            <div style="color:#00FFB0;font-size:12px;font-weight:800;">
+                ● AI SYSTEM ONLINE
+            </div>
+            <div style="color:#74869A;font-size:11px;margin-top:5px;">
+                Custom trained YOLO models ready
+            </div>
+        </div>
+        """)
 
-
-        with col2:
-
-            if st.session_state.analyzed_data is not None:
-
-                st.html(
-                    """
-                    <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        align-items:center;
-                        margin-bottom:10px;
-                    ">
-
-                        <h3 style="
-                            margin:0;
-                            color:white;
-                        ">
-                            🛰️ AI Detection
-                        </h3>
-
-                        <span class="status-online">
-                            ANALYZED
-                        </span>
-
-                    </div>
-                    """
-                )
-
-                st.image(
-                    st.session_state.analyzed_data[
-                        "results_img"
-                    ],
-                    use_container_width=True
-                )
-
-            else:
-
-                st.html(
-                    """
-                    <div style="
-                        height:300px;
-
-                        display:flex;
-                        align-items:center;
-                        justify-content:center;
-
-                        text-align:center;
-
-                        border:
-                            1px dashed
-                            rgba(0,229,255,.25);
-
-                        border-radius:16px;
-
-                        color:#64748b;
-                    ">
-
-                        <div>
-
-                            <div style="
-                                font-size:50px;
-                            ">
-                                🛰️
-                            </div>
-
-                            <div style="
-                                font-size:17px;
-                                font-weight:700;
-                                color:#94a3b8;
-                            ">
-                                AI Detection Output
-                            </div>
-
-                            <div style="
-                                font-size:12px;
-                                margin-top:6px;
-                            ">
-                                Run analysis to visualize
-                                detections
-                            </div>
-
-                        </div>
-
-                    </div>
-                    """
-                )
-
-
-        # ====================================================
-        # ANALYSIS BUTTON
-        # ====================================================
-
-        st.markdown("")
-
+        # Action stays in the control panel, directly below the upload area.
+        st.markdown(
+            """
+            <div style="
+                margin-top:14px;
+                margin-bottom:6px;
+                color:#00E5FF;
+                font-size:10px;
+                font-weight:900;
+                letter-spacing:1px;
+            ">ACTION</div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         run_analysis = st.button(
-            "🚀 RUN AI ANALYSIS",
-            key="run_ai_btn"
+            "🚀  RUN AI ANALYSIS",
+            use_container_width=True,
+            key="run_analysis_new_ui",
         )
 
+    # Persistent state must exist before the image/output columns render.
+    if "analysis_data" not in st.session_state:
+        st.session_state.analysis_data = None
 
-        if run_analysis:
+    with center_col:
 
-            st.session_state.analyzed_data = None
+        # Original and AI output are side-by-side for a cleaner inspection workflow.
+        input_view, output_view = st.columns(2, gap="small")
 
+        with input_view:
+            st.html('<div class="image-title">📸 ORIGINAL INPUT</div>')
 
-            scanner = st.empty()
-
-
-            scanner.html(
-                """
-                <div class="scan-box">
-
-                    <div style="
-                        padding:42px;
-                        text-align:center;
-                    ">
-
-                        <div style="
-                            font-size:42px;
-                        ">
-                            🛰️
-                        </div>
-
-                        <div style="
-                            color:#00e5ff;
-                            font-size:20px;
-                            font-weight:800;
-                            margin-top:8px;
-                        ">
-                            AI VISION SCANNING
-                        </div>
-
-                        <div style="
-                            color:#64748b;
-                            font-size:13px;
-                            margin-top:7px;
-                        ">
-                            Detecting panel boundaries
-                            • dust • cracks • hotspots
-                        </div>
-
+            if uploaded_file is None:
+                st.html("""
+                <div class="image-frame" style="height:260px;display:flex;
+                            align-items:center;justify-content:center;flex-direction:column;">
+                    <div style="font-size:52px;">☀️</div>
+                    <div style="font-size:15px;font-weight:800;color:#DDE7F3;">
+                        Ready for Solar Inspection
                     </div>
-
+                    <div style="color:#728096;font-size:11px;margin-top:7px;text-align:center;">
+                        Upload a clear solar-panel image from the control panel.
+                    </div>
                 </div>
+                """)
+            else:
+                file_bytes = np.frombuffer(uploaded_file.getvalue(), dtype=np.uint8)
+                original_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if original_bgr is None:
+                    st.error("❌ Unable to read this image.")
+                    st.stop()
+                original_rgb = cv2.cvtColor(original_bgr, cv2.COLOR_BGR2RGB)
+                st.image(original_rgb, use_container_width=True)
+
+        with output_view:
+            st.html('<div class="image-title">🤖 AI DETECTION OUTPUT</div>')
+
+            if st.session_state.analysis_data is not None:
+                st.image(
+                    st.session_state.analysis_data["results_img"],
+                    use_container_width=True
+                )
+            else:
+                st.html("""
+                <div class="image-frame" style="height:260px;display:flex;
+                            align-items:center;justify-content:center;flex-direction:column;">
+                    <div style="font-size:48px;">🤖</div>
+                    <div style="color:#DDE7F3;font-size:14px;font-weight:800;">
+                        AI Detection Output
+                    </div>
+                    <div style="color:#6F8299;font-size:11px;margin-top:7px;text-align:center;">
+                        Click RUN AI ANALYSIS in the left control panel.
+                    </div>
+                </div>
+                """)
+
+        # Keep the image area focused. Detailed analysis is rendered below the 3-column deck.
+        if st.session_state.analysis_data is not None:
+            _d = st.session_state.analysis_data
+            st.markdown(
+                f"""
+                <div style="margin-top:12px;padding:14px 16px;border:1px solid #173E56;
+                            border-radius:14px;background:linear-gradient(135deg,#06131E,#081B26);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                        <div>
+                            <div style="color:#00E5FF;font-size:11px;font-weight:900;letter-spacing:1.2px;">AI ANALYSIS COMPLETE</div>
+                            <div style="color:#AAB7C8;font-size:11px;margin-top:4px;">
+                                {_d["total_detections"]} detected regions • {_d["priority"]} priority • Avg confidence {_d["avg_confidence"]:.2f}
+                            </div>
+                        </div>
+                        <div style="font-size:26px;font-weight:900;color:#00FFB0;">{_d["health_numeric"]}<span style="font-size:11px;color:#718198;">/100</span></div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
                 """
+                <div style="margin-top:12px;padding:11px 14px;border:1px dashed #23415A;
+                            border-radius:12px;background:#050B12;color:#6F8299;font-size:11px;text-align:center;">
+                    Upload an image and press <b style="color:#00E5FF;">RUN AI ANALYSIS</b> to generate the annotated image and detailed inspection report.
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-
-            with st.spinner(
-                "Running YOLO vision models..."
-            ):
-
-                # --------------------------------------------
-                # PANEL
-                # --------------------------------------------
-
-                is_panel_present = (
-                    validate_solar_panel(
-                        original_img,
-                        models
-                    )
-                )
-
-
-                # --------------------------------------------
-                # INITIAL VALUES
-                # --------------------------------------------
-
-                results_img = rgb_img.copy()
-
-                total_detections = 0
-
-                confidences = []
-
-                num_dust = 0
-                num_cracks = 0
-                num_hotspots = 0
-
-                dust_status = "UNTESTED"
-                crack_status = "UNTESTED"
-                hotspot_status = "UNTESTED"
-
-
-                # ---> FIX: ONLY RUN YOLO IF A PANEL IS DETECTED! <---
-                if is_panel_present:
-
-                    # --------------------------------------------
-                    # DUST
-                    # --------------------------------------------
-
-                    if inspection_mode in [
-                        "Dust Detection",
-                        "Comprehensive Analysis"
-                    ]:
-
-                        if models["dust"] is not None:
-
-                            result = run_model(
-                                models["dust"],
-                                original_img,
-                                confidence_threshold
-                            )
-
-                            if result is not None:
-
-                                num_dust = len(
-                                    result.boxes
-                                )
-
-                                total_detections += (
-                                    num_dust
-                                )
-
-                                if num_dust > 0:
-
-                                    dust_status = (
-                                        f"DETECTED "
-                                        f"({num_dust} regions)"
-                                    )
-
-                                    results_img, confs = (
-                                        draw_detections(
-                                            results_img,
-                                            result,
-                                            "DUST",
-                                            (0, 229, 255)
-                                        )
-                                    )
-
-                                    confidences.extend(
-                                        confs
-                                    )
-
-                                else:
-
-                                    dust_status = "NONE"
-
-                        else:
-
-                            dust_status = "MODEL MISSING"
-
-
-                    # --------------------------------------------
-                    # CRACK
-                    # --------------------------------------------
-
-                    if inspection_mode in [
-                        "Crack Detection",
-                        "Comprehensive Analysis"
-                    ]:
-
-                        if models["crack"] is not None:
-
-                            result = run_model(
-                                models["crack"],
-                                original_img,
-                                confidence_threshold
-                            )
-
-                            if result is not None:
-
-                                num_cracks = len(
-                                    result.boxes
-                                )
-
-                                total_detections += (
-                                    num_cracks
-                                )
-
-                                if num_cracks > 0:
-
-                                    crack_status = (
-                                        f"DETECTED "
-                                        f"({num_cracks} regions)"
-                                    )
-
-                                    results_img, confs = (
-                                        draw_detections(
-                                            results_img,
-                                            result,
-                                            "CRACK",
-                                            (255, 70, 100)
-                                        )
-                                    )
-
-                                    confidences.extend(
-                                        confs
-                                    )
-
-                                else:
-
-                                    crack_status = "NONE"
-
-                        else:
-
-                            crack_status = "MODEL MISSING"
-
-
-                    # --------------------------------------------
-                    # HOTSPOT
-                    # --------------------------------------------
-
-                    if inspection_mode in [
-                        "Hotspot Detection",
-                        "Comprehensive Analysis"
-                    ]:
-
-                        if models["hotspot"] is not None:
-
-                            result = run_model(
-                                models["hotspot"],
-                                original_img,
-                                confidence_threshold
-                            )
-
-                            if result is not None:
-
-                                num_hotspots = len(
-                                    result.boxes
-                                )
-
-                                total_detections += (
-                                    num_hotspots
-                                )
-
-                                if num_hotspots > 0:
-
-                                    hotspot_status = (
-                                        f"DETECTED "
-                                        f"({num_hotspots} regions)"
-                                    )
-
-                                    results_img, confs = (
-                                        draw_detections(
-                                            results_img,
-                                            result,
-                                            "HOTSPOT",
-                                            (255, 120, 0)
-                                        )
-                                    )
-
-                                    confidences.extend(
-                                        confs
-                                    )
-
-                                else:
-
-                                    hotspot_status = "NONE"
-
-                        else:
-
-                            hotspot_status = "MODEL MISSING"
-
-
-                # =================================================
-                # LOSS ESTIMATION
-                # =================================================
-
-                dust_loss = min(
-                    num_dust * 2.5,
-                    30.0
-                )
-
-                crack_loss = min(
-                    num_cracks * 5.0,
-                    40.0
-                )
-
-                hotspot_loss = min(
-                    num_hotspots * 15.0,
-                    60.0
-                )
-
-                total_loss = min(
-                    dust_loss
-                    + crack_loss
-                    + hotspot_loss,
-                    100.0
-                )
-
-                efficiency = (
-                    100.0 - total_loss
-                )
-
-
-                # =================================================
-                # HEALTH
-                # =================================================
-
-                if not is_panel_present:
-
-                    health_score = "N/A"
-                    priority = "INVALID"
-                    panel_status = "NOT DETECTED"
-
-                else:
-
-                    score = get_health_score(
-                        total_detections
+    with right_col:
+        st.html("""
+        <div class="about-card" style="padding:18px;">
+            <div style="font-size:18px;font-weight:900;color:#EAF2FF;margin-bottom:12px;">
+                ℹ️ ABOUT SUPER SIX
+            </div>
+            <p style="color:#AAB7C8;line-height:1.65;font-size:12px;">
+                Super Six is an AI-powered computer vision platform designed to
+                assist solar-panel inspection and maintenance.
+            </p>
+            <p style="color:#AAB7C8;line-height:1.65;font-size:12px;">
+                Your custom-trained YOLO models identify soiling, cracks and
+                thermal hotspot patterns from inspection images.
+            </p>
+            <hr style="border-color:#193047;">
+            <div style="color:#00E5FF;font-size:14px;font-weight:900;margin-bottom:9px;">
+                👥 TEAM SUPER SIX
+            </div>
+            <div class="team-grid" style="grid-template-columns:repeat(2,1fr);gap:7px;">
+                <div class="team-member" style="padding:9px;font-size:11px;">Abhijeet Singh</div>
+                <div class="team-member" style="padding:9px;font-size:11px;">Nidhi</div>
+                <div class="team-member" style="padding:9px;font-size:11px;">Ansh</div>
+                <div class="team-member" style="padding:9px;font-size:11px;">Anubhav</div>
+                <div class="team-member" style="padding:9px;font-size:11px;">Akanksha</div>
+                <div class="team-member" style="padding:9px;font-size:11px;">Trisha</div>
+            </div>
+            <hr style="border-color:#193047;margin:13px 0;">
+            <div style="color:#00E5FF;font-size:14px;font-weight:900;margin-bottom:8px;">
+                🛠️ TECHNOLOGY STACK
+            </div>
+            <div style="color:#C7D1DE;font-size:11px;line-height:1.9;">
+                • Python &nbsp; • Streamlit<br>
+                • YOLO Object Detection<br>
+                • OpenCV &nbsp; • Pandas<br>
+                • Custom Trained AI Models
+            </div>
+            <hr style="border-color:#193047;margin:13px 0;">
+            <div style="color:#FFB000;font-size:14px;font-weight:900;">
+                👑 LEAD DEVELOPER
+            </div>
+            <div style="font-size:17px;font-weight:900;color:white;margin-top:5px;">
+                Abhijeet Singh
+            </div>
+        </div>
+        """)
+
+    # ========================================================
+    # ORIGINAL AI ANALYSIS ENGINE — PRESERVED
+# ========================================================
+    if run_analysis:
+
+        with st.spinner(
+            "🧠 Running Super Six AI models..."
+        ):
+
+            output_bgr = original_bgr.copy()
+
+            total_detections = 0
+
+            confidence_values = []
+            detection_details = []
+            image_h, image_w = original_bgr.shape[:2]
+
+            dust_count = 0
+            crack_count = 0
+            hotspot_count = 0
+
+            dust_status = "UNTESTED"
+            crack_status = "UNTESTED"
+            hotspot_status = "UNTESTED"
+
+
+            # ============================================
+            # DUST MODEL
+            # ============================================
+
+            if inspection_mode in [
+                "Dust Detection",
+                "Comprehensive Analysis",
+            ]:
+
+                model = models.get("dust")
+
+                if model is not None:
+
+                    result = model(
+                        original_bgr,
+                        conf=confidence_threshold,
+                        verbose=False,
+                    )[0]
+
+                    dust_count = len(
+                        result.boxes
                     )
 
-                    health_score = (
-                        f"{score}/100"
-                    )
+                    total_detections += dust_count
 
-                    priority = get_priority(
-                        score
-                    )
+                    if dust_count > 0:
 
-                    if total_detections == 0:
-
-                        panel_status = (
-                            "DETECTED (CLEAN)"
+                        dust_status = (
+                            f"DETECTED ({dust_count} regions)"
                         )
 
                     else:
 
-                        panel_status = (
-                            "DETECTED (DEFECTIVE)"
+                        dust_status = "NONE"
+
+                    for box in result.boxes:
+
+                        confidence = float(
+                            box.conf[0]
                         )
 
+                        confidence_values.append(
+                            confidence
+                        )
 
-                # =================================================
-                # STORE RESULT
-                # =================================================
+                        x1, y1, x2, y2 = map(
+                            int,
+                            box.xyxy[0].tolist()
+                        )
 
-                st.session_state.analyzed_data = {
+                        region_area_pct = (
+                            max(0, x2 - x1) * max(0, y2 - y1)
+                            / max(1, image_w * image_h)
+                            * 100.0
+                        )
+                        detection_details.append({
+                            "type": "Soiling / Dust",
+                            "confidence": confidence,
+                            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                            "area_pct": region_area_pct,
+                        })
 
-                    "results_img":
-                        results_img,
+                        cv2.rectangle(
+                            output_bgr,
+                            (x1, y1),
+                            (x2, y2),
+                            (255, 190, 0),
+                            3,
+                        )
 
-                    "is_panel_present":
-                        is_panel_present,
+                        label = (
+                            f"DUST "
+                            f"{confidence:.2f}"
+                        )
 
-                    "total_detections":
-                        total_detections,
+                        cv2.putText(
+                            output_bgr,
+                            label,
+                            (x1, max(25, y1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (255, 190, 0),
+                            2,
+                            cv2.LINE_AA,
+                        )
 
-                    "confidences":
-                        confidences,
+                else:
 
-                    "num_dust":
-                        num_dust,
-
-                    "num_cracks":
-                        num_cracks,
-
-                    "num_hotspots":
-                        num_hotspots,
-
-                    "dust_status":
-                        dust_status,
-
-                    "crack_status":
-                        crack_status,
-
-                    "hotspot_status":
-                        hotspot_status,
-
-                    "dust_loss":
-                        dust_loss,
-
-                    "crack_loss":
-                        crack_loss,
-
-                    "hotspot_loss":
-                        hotspot_loss,
-
-                    "total_estimated_loss":
-                        total_loss,
-
-                    "current_efficiency":
-                        efficiency,
-
-                    "health_score":
-                        health_score,
-
-                    "priority":
-                        priority,
-
-                    "panel_status":
-                        panel_status
-                }
+                    dust_status = "MODEL MISSING"
 
 
-            scanner.empty()
+            # ============================================
+            # CRACK MODEL
+            # ============================================
+
+            if inspection_mode in [
+                "Crack Detection",
+                "Comprehensive Analysis",
+            ]:
+
+                model = models.get("crack")
+
+                if model is not None:
+
+                    result = model(
+                        original_bgr,
+                        conf=confidence_threshold,
+                        verbose=False,
+                    )[0]
+
+                    crack_count = len(
+                        result.boxes
+                    )
+
+                    total_detections += crack_count
+
+                    if crack_count > 0:
+
+                        crack_status = (
+                            f"DETECTED ({crack_count} regions)"
+                        )
+
+                    else:
+
+                        crack_status = "NONE"
+
+                    for box in result.boxes:
+
+                        confidence = float(
+                            box.conf[0]
+                        )
+
+                        confidence_values.append(
+                            confidence
+                        )
+
+                        x1, y1, x2, y2 = map(
+                            int,
+                            box.xyxy[0].tolist()
+                        )
+
+                        region_area_pct = (
+                            max(0, x2 - x1) * max(0, y2 - y1)
+                            / max(1, image_w * image_h)
+                            * 100.0
+                        )
+                        detection_details.append({
+                            "type": "Structural Crack",
+                            "confidence": confidence,
+                            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                            "area_pct": region_area_pct,
+                        })
+
+                        cv2.rectangle(
+                            output_bgr,
+                            (x1, y1),
+                            (x2, y2),
+                            (255, 70, 90),
+                            3,
+                        )
+
+                        label = (
+                            f"CRACK "
+                            f"{confidence:.2f}"
+                        )
+
+                        cv2.putText(
+                            output_bgr,
+                            label,
+                            (x1, max(25, y1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (255, 70, 90),
+                            2,
+                            cv2.LINE_AA,
+                        )
+
+                else:
+
+                    crack_status = "MODEL MISSING"
+
+
+            # ============================================
+            # HOTSPOT MODEL
+            # ============================================
+
+            if inspection_mode in [
+                "Hotspot Detection",
+                "Comprehensive Analysis",
+            ]:
+
+                model = models.get("hotspot")
+
+                if model is not None:
+
+                    result = model(
+                        original_bgr,
+                        conf=confidence_threshold,
+                        verbose=False,
+                    )[0]
+
+                    hotspot_count = len(
+                        result.boxes
+                    )
+
+                    total_detections += hotspot_count
+
+                    if hotspot_count > 0:
+
+                        hotspot_status = (
+                            f"DETECTED ({hotspot_count} regions)"
+                        )
+
+                    else:
+
+                        hotspot_status = "NONE"
+
+                    for box in result.boxes:
+
+                        confidence = float(
+                            box.conf[0]
+                        )
+
+                        confidence_values.append(
+                            confidence
+                        )
+
+                        x1, y1, x2, y2 = map(
+                            int,
+                            box.xyxy[0].tolist()
+                        )
+
+                        region_area_pct = (
+                            max(0, x2 - x1) * max(0, y2 - y1)
+                            / max(1, image_w * image_h)
+                            * 100.0
+                        )
+                        detection_details.append({
+                            "type": "Thermal Hotspot",
+                            "confidence": confidence,
+                            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                            "area_pct": region_area_pct,
+                        })
+
+                        cv2.rectangle(
+                            output_bgr,
+                            (x1, y1),
+                            (x2, y2),
+                            (0, 170, 255),
+                            3,
+                        )
+
+                        label = (
+                            f"HOTSPOT "
+                            f"{confidence:.2f}"
+                        )
+
+                        cv2.putText(
+                            output_bgr,
+                            label,
+                            (x1, max(25, y1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 170, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+
+                else:
+
+                    hotspot_status = "MODEL MISSING"
+
+
+            # ============================================
+            # CALCULATIONS
+            # ============================================
+
+            dust_loss = min(
+                dust_count * 2.5,
+                30.0
+            )
+
+            crack_loss = min(
+                crack_count * 5.0,
+                40.0
+            )
+
+            hotspot_loss = min(
+                hotspot_count * 15.0,
+                60.0
+            )
+
+            total_loss = min(
+                dust_loss
+                + crack_loss
+                + hotspot_loss,
+                100.0,
+            )
+
+            efficiency = max(
+                0.0,
+                100.0 - total_loss
+            )
+
+
+            if total_detections == 0:
+
+                health_numeric = 100
+
+                priority = "LOW"
+
+            else:
+
+                health_numeric = max(
+                    0,
+                    100 - (
+                        total_detections * 15
+                    ),
+                )
+
+                if health_numeric < 50:
+
+                    priority = "HIGH"
+
+                else:
+
+                    priority = "MEDIUM"
+
+
+            health_score = (
+                f"{health_numeric}/100"
+            )
+
+
+            avg_confidence = (
+                sum(confidence_values)
+                / len(confidence_values)
+                if confidence_values
+                else 0.0
+            )
+
+
+            highest_confidence = (
+                max(confidence_values)
+                if confidence_values
+                else 0.0
+            )
+
+
+            output_rgb = cv2.cvtColor(
+                output_bgr,
+                cv2.COLOR_BGR2RGB
+            )
+
+
+            # ============================================
+            # SAVE STATE
+            # ============================================
+
+            st.session_state.analysis_data = {
+
+                "results_img":
+                    output_rgb,
+
+                "total_detections":
+                    total_detections,
+
+                "dust_count":
+                    dust_count,
+
+                "crack_count":
+                    crack_count,
+
+                "hotspot_count":
+                    hotspot_count,
+
+                "dust_status":
+                    dust_status,
+
+                "crack_status":
+                    crack_status,
+
+                "hotspot_status":
+                    hotspot_status,
+
+                "total_loss":
+                    total_loss,
+
+                "efficiency":
+                    efficiency,
+
+                "health_numeric":
+                    health_numeric,
+
+                "health_score":
+                    health_score,
+
+                "priority":
+                    priority,
+
+                "avg_confidence":
+                    avg_confidence,
+
+                "highest_confidence":
+                    highest_confidence,
+                "detection_details":
+                    detection_details,
+            }
 
             st.rerun()
 
 
-        # ====================================================
+    # ========================================================
+    # DETAILED REPORT — KEEP IT DIRECTLY UNDER THE IMAGES
+    # ========================================================
+    with center_col:
+        # ----------------------------------------------------
         # RESULTS
-        # ====================================================
+        # ----------------------------------------------------
 
-        if st.session_state.analyzed_data is not None:
+        if st.session_state.analysis_data is not None:
 
-            data = (
-                st.session_state.analyzed_data
+            data = st.session_state.analysis_data
+
+
+            st.markdown(
+                """
+                <div class="section-title">
+                    📊 Live AI Analysis
+                </div>
+
+                <div class="section-subtitle">
+                    Results generated from your trained YOLO models.
+                </div>
+                """,
+                unsafe_allow_html=True
             )
 
 
-            st.markdown("---")
+            # ------------------------------------------------
+            # DETAILED AI INSPECTION REPORT
+            # ------------------------------------------------
+            details = data.get("detection_details", [])
+            dust_loss = min(data["dust_count"] * 2.5, 30.0)
+            crack_loss = min(data["crack_count"] * 5.0, 40.0)
+            hotspot_loss = min(data["hotspot_count"] * 15.0, 60.0)
 
+            st.markdown(
+                """
+                <div style="margin-top:18px;margin-bottom:8px;">
+                    <div style="font-size:25px;font-weight:900;color:#F2F7FF;">🔎 Detailed AI Inspection Report</div>
+                    <div style="font-size:12px;color:#718198;margin-top:5px;">Model findings, confidence, estimated impact and recommended action for this inspection.</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-            # =================================================
-            # INVALID PANEL
-            # =================================================
+            # Category-level findings. These values come directly from the model counts
+            # and the existing loss calculation in the application.
+            category_cards = [
+                ("🧹", "Soiling / Dust", data["dust_count"], dust_loss, "#00E5FF", data["dust_status"]),
+                ("💥", "Structural Cracks", data["crack_count"], crack_loss, "#FF4757", data["crack_status"]),
+                ("🔥", "Thermal Hotspots", data["hotspot_count"], hotspot_loss, "#FFB000", data["hotspot_status"]),
+            ]
+            c1, c2, c3 = st.columns(3, gap="medium")
+            for col, (icon, title, count, loss, accent, status) in zip((c1, c2, c3), category_cards):
+                with col:
+                    st.markdown(
+                        f"""
+                        <div style="height:100%;padding:18px;border:1px solid #1A3348;border-radius:16px;
+                                    background:linear-gradient(145deg,#081521,#050B12);border-top:3px solid {accent};">
+                            <div style="font-size:12px;color:{accent};font-weight:900;letter-spacing:.6px;">{icon} {title.upper()}</div>
+                            <div style="font-size:38px;font-weight:900;color:#F4F8FF;margin-top:9px;">{count}</div>
+                            <div style="font-size:11px;color:#78879A;">DETECTED REGIONS</div>
+                            <div style="margin-top:13px;font-size:13px;color:#D5DFEA;"><b>Status:</b> {status}</div>
+                            <div style="margin-top:7px;font-size:13px;color:#D5DFEA;"><b>Estimated impact:</b> {loss:.1f}%</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-            if not data["is_panel_present"]:
-
-                st.error(
-                    "❌ No Solar Panel Detected"
+            # Region-by-region details are available when the YOLO model returns boxes.
+            if details:
+                rows = []
+                for idx, item in enumerate(details, 1):
+                    cx = ((item["x1"] + item["x2"]) / 2) / max(1, image_w) * 100 if "image_w" in locals() else 0
+                    cy = ((item["y1"] + item["y2"]) / 2) / max(1, image_h) * 100 if "image_h" in locals() else 0
+                    # image dimensions are reconstructed from the uploaded image when available
+                    if uploaded_file is not None:
+                        try:
+                            ih, iw = original_bgr.shape[:2]
+                            cx = ((item["x1"] + item["x2"]) / 2) / iw * 100
+                            cy = ((item["y1"] + item["y2"]) / 2) / ih * 100
+                        except Exception:
+                            pass
+                    rows.append(
+                        f"""<tr><td>{idx}</td><td><b>{item["type"]}</b></td><td>{item["confidence"]:.2f}</td>
+                        <td>{cx:.0f}% across / {cy:.0f}% down</td><td>{item["area_pct"]:.2f}% of image</td></tr>"""
+                    )
+                st.markdown(
+                    f"""
+                    <div style="margin-top:18px;border:1px solid #1A3348;border-radius:16px;overflow:hidden;background:#050B12;">
+                        <div style="padding:14px 16px;color:#00E5FF;font-size:14px;font-weight:900;border-bottom:1px solid #173047;">📍 DETECTED REGIONS — REGION-BY-REGION DETAILS</div>
+                        <div style="overflow-x:auto;">
+                        <table style="width:100%;border-collapse:collapse;font-size:12px;color:#C9D5E2;">
+                            <thead><tr style="background:#091724;color:#71869B;text-align:left;">
+                                <th style="padding:11px;">#</th><th style="padding:11px;">DEFECT TYPE</th><th style="padding:11px;">CONFIDENCE</th>
+                                <th style="padding:11px;">APPROX. LOCATION</th><th style="padding:11px;">BOX AREA</th>
+                            </tr></thead>
+                            <tbody>{''.join(rows)}</tbody>
+                        </table>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
+
+            # Explain what the numbers mean rather than only displaying them.
+            interpretation = []
+            if data["dust_count"]:
+                interpretation.append(f"<b>Soiling:</b> {data["dust_count"]} region(s) detected; the current model calculation assigns {dust_loss:.1f}% estimated loss contribution.")
+            if data["crack_count"]:
+                interpretation.append(f"<b>Cracks:</b> {data["crack_count"]} region(s) detected; the current model calculation assigns {crack_loss:.1f}% estimated loss contribution.")
+            if data["hotspot_count"]:
+                interpretation.append(f"<b>Hotspots:</b> {data["hotspot_count"]} region(s) detected; the current model calculation assigns {hotspot_loss:.1f}% estimated loss contribution.")
+            if not interpretation:
+                interpretation.append("No defect regions were returned above the selected confidence threshold.")
+
+            st.markdown(
+                f"""
+                <div style="margin-top:18px;display:grid;grid-template-columns:1.15fr .85fr;gap:14px;">
+                    <div style="padding:18px;border:1px solid #1A3348;border-radius:16px;background:#07111B;">
+                        <div style="color:#00E5FF;font-size:14px;font-weight:900;margin-bottom:10px;">🧠 WHAT THE AI FOUND</div>
+                        <div style="color:#B9C6D5;font-size:13px;line-height:1.8;">{'<br>'.join(interpretation)}</div>
+                    </div>
+                    <div style="padding:18px;border:1px solid #1A3348;border-radius:16px;background:#07111B;">
+                        <div style="color:#FFB000;font-size:14px;font-weight:900;margin-bottom:10px;">🛠️ NEXT ACTION</div>
+                        <div style="color:#B9C6D5;font-size:13px;line-height:1.8;">
+                            {'Prioritize professional inspection of the detected regions, especially cracks or hotspots. Clean soiled areas using an appropriate PV-safe procedure and re-inspect after maintenance.' if (data["crack_count"] or data["hotspot_count"]) else 'Clean the detected soiled regions using a PV-safe procedure, then run another inspection to confirm improvement.'}
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ------------------------------------------------
+            # STATUS
+            # ------------------------------------------------
+
+            if data["total_detections"] == 0:
 
                 st.html(
                     """
-                    <div class="ai-card">
+                    <div class="report-card good">
 
-                        <h3 style="
-                            color:#ff3864;
-                        ">
-                            ⚠️ Image Validation Failed
+                        <h3 style="color:#00FFB0;">
+                            ✅ No Defects Detected
                         </h3>
 
-                        <p style="
-                            color:#94a3b8;
-                        ">
-                            The AI system could not identify
-                            a valid solar panel in this image.
+                        <p style="color:#8D9AAC;">
+                            No trained defect category was
+                            detected above the selected confidence
+                            threshold.
                         </p>
-
-                        <span class="status-online"
-                              style="
-                                color:#ff3864;
-                                border-color:
-                                rgba(255,56,100,.35);
-                              ">
-                            PANEL NOT DETECTED
-                        </span>
 
                     </div>
                     """
                 )
 
+            elif data["priority"] == "HIGH":
+
+                st.html(
+                    """
+                    <div class="report-card danger">
+
+                        <h3 style="color:#FF4757;">
+                            🚨 Critical Defect Detected
+                        </h3>
+
+                        <p style="color:#8D9AAC;">
+                            Significant defect activity was
+                            detected. Maintenance inspection
+                            is recommended.
+                        </p>
+
+                    </div>
+                    """
+                )
 
             else:
 
-                # =================================================
-                # STATUS
-                # =================================================
+                st.html(
+                    """
+                    <div class="report-card warning">
 
-                if data["total_detections"] == 0:
+                        <h3 style="color:#FFB000;">
+                            ⚠️ Defect / Soiling Detected
+                        </h3>
 
-                    st.success(
-                        "✅ AI Analysis Complete — Panel appears healthy."
-                    )
+                        <p style="color:#8D9AAC;">
+                            The AI detected one or more
+                            potentially problematic regions.
+                        </p>
 
-                else:
-
-                    st.warning(
-                        "⚠️ Potential defects or soiling detected."
-                    )
-
-
-                # =================================================
-                # METRICS
-                # =================================================
-
-                st.markdown(
-                    "## 📊 Inspection Intelligence"
+                    </div>
+                    """
                 )
 
 
-                m1, m2, m3, m4 = st.columns(4)
+            # ------------------------------------------------
+            # METRICS
+            # ------------------------------------------------
 
+            st.html(
+                f"""
+                <div class="metric-grid">
 
-                if data["confidences"]:
+                    <div class="metric-card">
 
-                    avg_conf = (
-                        sum(
-                            data["confidences"]
-                        )
-                        /
-                        len(
-                            data["confidences"]
-                        )
-                    )
-
-                    avg_conf_text = (
-                        f"{avg_conf:.2f}"
-                    )
-
-                else:
-
-                    avg_conf_text = "N/A"
-
-
-                with m1:
-
-                    st.html(
-                        f"""
-                        <div class="metric-container">
-
-                            <small style="
-                                color:#94a3b8;
-                            ">
-                                🔎 TOTAL DEFECTS
-                            </small>
-
-                            <h2 style="
-                                font-size:34px;
-                                color:white;
-                                margin:8px 0;
-                            ">
-                                {data['total_detections']}
-                            </h2>
-
-                            <small style="
-                                color:#64748b;
-                            ">
-                                AI detected regions
-                            </small>
-
+                        <div class="metric-label">
+                            Total Defects
                         </div>
-                        """
-                    )
 
-
-                with m2:
-
-                    loss = data[
-                        "total_estimated_loss"
-                    ]
-
-                    if loss > 20:
-
-                        loss_color = "#ff3864"
-
-                    elif loss > 5:
-
-                        loss_color = "#ffd43b"
-
-                    else:
-
-                        loss_color = "#00ff9d"
-
-
-                    st.html(
-                        f"""
-                        <div class="metric-container">
-
-                            <small style="
-                                color:#94a3b8;
-                            ">
-                                ⚡ ESTIMATED LOSS
-                            </small>
-
-                            <h2 style="
-                                font-size:34px;
-                                color:{loss_color};
-                                margin:8px 0;
-                            ">
-                                {loss:.1f}%
-                            </h2>
-
-                            <small style="
-                                color:#64748b;
-                            ">
-                                Estimated energy impact
-                            </small>
-
+                        <div class="metric-value">
+                            {data["total_detections"]}
                         </div>
-                        """
-                    )
 
-
-                with m3:
-
-                    st.html(
-                        f"""
-                        <div class="metric-container">
-
-                            <small style="
-                                color:#94a3b8;
-                            ">
-                                ☀️ EFFICIENCY
-                            </small>
-
-                            <h2 style="
-                                font-size:34px;
-                                color:#00ff9d;
-                                margin:8px 0;
-                            ">
-                                {data['current_efficiency']:.1f}%
-                            </h2>
-
-                            <small style="
-                                color:#64748b;
-                            ">
-                                Estimated current output
-                            </small>
-
+                        <div class="metric-small">
+                            LIVE AI RESULT
                         </div>
-                        """
-                    )
+
+                    </div>
 
 
-                with m4:
+                    <div class="metric-card">
 
-                    st.html(
-                        f"""
-                        <div class="metric-container">
-
-                            <small style="
-                                color:#94a3b8;
-                            ">
-                                🎯 AI CONFIDENCE
-                            </small>
-
-                            <h2 style="
-                                font-size:34px;
-                                color:#00e5ff;
-                                margin:8px 0;
-                            ">
-                                {avg_conf_text}
-                            </h2>
-
-                            <small style="
-                                color:#64748b;
-                            ">
-                                Detection certainty
-                            </small>
-
+                        <div class="metric-label">
+                            Estimated Loss
                         </div>
-                        """
-                    )
+
+                        <div class="metric-value"
+                             style="color:#FFB000;">
+                            {data["total_loss"]:.1f}%
+                        </div>
+
+                        <div class="metric-small">
+                            POWER IMPACT
+                        </div>
+
+                    </div>
 
 
-                # =================================================
-                # HEALTH GAUGE
-                # =================================================
+                    <div class="metric-card">
 
-                score = int(
-                    data["health_score"]
-                    .split("/")[0]
-                )
+                        <div class="metric-label">
+                            Current Efficiency
+                        </div>
 
-                health_color = get_health_color(
-                    score
-                )
+                        <div class="metric-value"
+                             style="color:#00FFB0;">
+                            {data["efficiency"]:.1f}%
+                        </div>
 
+                        <div class="metric-small">
+                            ESTIMATED
+                        </div>
 
-                if score >= 80:
-
-                    health_label = "EXCELLENT"
-
-                elif score >= 50:
-
-                    health_label = "ATTENTION"
-
-                else:
-
-                    health_label = "CRITICAL"
+                    </div>
 
 
-                st.markdown("")
+                    <div class="metric-card">
 
+                        <div class="metric-label">
+                            Avg Confidence
+                        </div>
+
+                        <div class="metric-value"
+                             style="color:#00E5FF;">
+                            {data["avg_confidence"]:.2f}
+                        </div>
+
+                        <div class="metric-small">
+                            AI CONFIDENCE
+                        </div>
+
+                    </div>
+
+                </div>
+                """
+            )
+
+
+            # ------------------------------------------------
+            # HEALTH / BREAKDOWN / RECOMMENDATION
+            # ------------------------------------------------
+
+            health_col, breakdown_col, recommendation_col = (
+                st.columns([1, 1.25, 1.25])
+            )
+
+
+            with health_col:
 
                 st.html(
                     f"""
-                    <div class="ai-card">
+                    <div class="report-card">
 
                         <div style="
-                            display:flex;
-                            justify-content:space-between;
-                            align-items:center;
-                            flex-wrap:wrap;
-                            gap:30px;
+                            text-align:center;
+                            color:#AEB8C7;
+                            font-weight:800;
                         ">
+                            ❤️ PANEL HEALTH SCORE
+                        </div>
 
-                            <div>
+                        <div class="health-circle">
 
-                                <div style="
-                                    color:#94a3b8;
-                                    font-size:13px;
-                                    font-weight:800;
-                                    letter-spacing:1px;
-                                ">
-                                    SOLAR PANEL HEALTH INDEX
+                            <div class="health-inner">
+
+                                <div class="health-score">
+                                    {data["health_numeric"]}
                                 </div>
 
-                                <div style="
-                                    font-size:46px;
-                                    font-weight:900;
-                                    color:{health_color};
-                                    margin-top:6px;
-                                ">
-                                    {score}
-                                    <span style="
-                                        font-size:20px;
-                                        color:#64748b;
-                                    ">
-                                        /100
-                                    </span>
-                                </div>
-
-                                <div style="
-                                    color:{health_color};
-                                    font-weight:850;
-                                    letter-spacing:1px;
-                                ">
-                                    ● {health_label}
-                                </div>
-
-                                <div style="
-                                    color:#64748b;
-                                    margin-top:10px;
-                                    font-size:13px;
-                                ">
-                                    Panel status:
-                                    {data['panel_status']}
+                                <div class="health-label">
+                                    / 100
                                 </div>
 
                             </div>
 
+                        </div>
 
-                            <div style="
-                                width:145px;
-                                height:145px;
-                                border-radius:50%;
-
-                                background:
-                                    conic-gradient(
-                                        {health_color}
-                                        {score}%,
-                                        #172033
-                                        {score}%
-                                    );
-
-                                display:flex;
-                                align-items:center;
-                                justify-content:center;
-
-                                box-shadow:
-                                    0 0 40px
-                                    {health_color}33;
-                            ">
-
-                                <div style="
-                                    width:115px;
-                                    height:115px;
-
-                                    border-radius:50%;
-
-                                    background:#050a12;
-
-                                    display:flex;
-                                    align-items:center;
-                                    justify-content:center;
-
-                                    color:white;
-
-                                    font-size:26px;
-                                    font-weight:850;
-                                ">
-                                    {score}%
-                                </div>
-
-                            </div>
-
+                        <div style="
+                            text-align:center;
+                            color:#00FFB0;
+                            font-weight:800;
+                        ">
+                            {data["priority"]} PRIORITY
                         </div>
 
                     </div>
@@ -2387,771 +2059,240 @@ with tab_dashboard:
                 )
 
 
-                # =================================================
-                # DETECTION BREAKDOWN
-                # =================================================
-
-                st.markdown(
-                    "### 🔬 AI Detection Breakdown"
-                )
-
-
-                d1, d2, d3 = st.columns(3)
-
-
-                with d1:
-
-                    st.html(
-                        f"""
-                        <div class="ai-card">
-
-                            <div style="
-                                font-size:32px;
-                            ">
-                                🧹
-                            </div>
-
-                            <div style="
-                                color:#94a3b8;
-                                font-size:12px;
-                                font-weight:700;
-                                margin-top:8px;
-                            ">
-                                DUST / SOILING
-                            </div>
-
-                            <div style="
-                                font-size:20px;
-                                font-weight:800;
-                                margin-top:7px;
-                                color:#00e5ff;
-                            ">
-                                {data['dust_status']}
-                            </div>
-
-                        </div>
-                        """
-                    )
-
-
-                with d2:
-
-                    st.html(
-                        f"""
-                        <div class="ai-card">
-
-                            <div style="
-                                font-size:32px;
-                            ">
-                                🔬
-                            </div>
-
-                            <div style="
-                                color:#94a3b8;
-                                font-size:12px;
-                                font-weight:700;
-                                margin-top:8px;
-                            ">
-                                MICRO CRACKS
-                            </div>
-
-                            <div style="
-                                font-size:20px;
-                                font-weight:800;
-                                margin-top:7px;
-                                color:#ff3864;
-                            ">
-                                {data['crack_status']}
-                            </div>
-
-                        </div>
-                        """
-                    )
-
-
-                with d3:
-
-                    st.html(
-                        f"""
-                        <div class="ai-card">
-
-                            <div style="
-                                font-size:32px;
-                            ">
-                                🔥
-                            </div>
-
-                            <div style="
-                                color:#94a3b8;
-                                font-size:12px;
-                                font-weight:700;
-                                margin-top:8px;
-                            ">
-                                THERMAL HOTSPOTS
-                            </div>
-
-                            <div style="
-                                font-size:20px;
-                                font-weight:800;
-                                margin-top:7px;
-                                color:#ff9f1c;
-                            ">
-                                {data['hotspot_status']}
-                            </div>
-
-                        </div>
-                        """
-                    )
-
-
-                # =================================================
-                # ENERGY LOSS
-                # =================================================
-
-                st.markdown(
-                    "### ⚡ Estimated Energy Impact"
-                )
-
-
-                l1, l2, l3 = st.columns(3)
-
-
-                loss_cards = [
-                    (
-                        l1,
-                        "🧹",
-                        "Dust / Soiling",
-                        data["dust_loss"],
-                        "#00e5ff"
-                    ),
-                    (
-                        l2,
-                        "🔬",
-                        "Structural Cracks",
-                        data["crack_loss"],
-                        "#ff3864"
-                    ),
-                    (
-                        l3,
-                        "🔥",
-                        "Thermal Hotspots",
-                        data["hotspot_loss"],
-                        "#ff9f1c"
-                    )
-                ]
-
-
-                for col, icon, title, value, color in loss_cards:
-
-                    with col:
-
-                        st.html(
-                            f"""
-                            <div class="metric-container">
-
-                                <div style="
-                                    font-size:30px;
-                                ">
-                                    {icon}
-                                </div>
-
-                                <div style="
-                                    color:#94a3b8;
-                                    margin-top:7px;
-                                ">
-                                    {title}
-                                </div>
-
-                                <div style="
-                                    font-size:30px;
-                                    font-weight:850;
-                                    color:{color};
-                                    margin-top:5px;
-                                ">
-                                    {value:.1f}%
-                                </div>
-
-                            </div>
-                            """
-                        )
-
-
-                # =================================================
-                # RECOMMENDATION
-                # =================================================
-
-                st.markdown(
-                    "### 🧠 AI Recommendation"
-                )
-
-
-                if data["total_detections"] == 0:
-
-                    recommendation_title = (
-                        "✓ PANEL CONDITION OPTIMAL"
-                    )
-
-                    recommendation_text = (
-                        "No significant AI-detected defects "
-                        "were found. Continue routine monitoring "
-                        "and scheduled cleaning."
-                    )
-
-                    recommendation_color = "#00ff9d"
-
-                elif score >= 50:
-
-                    recommendation_title = (
-                        "⚠ ATTENTION RECOMMENDED"
-                    )
-
-                    recommendation_text = (
-                        "Potential surface defects or soiling "
-                        "were detected. Consider cleaning and "
-                        "performing a physical inspection."
-                    )
-
-                    recommendation_color = "#ffd43b"
-
-                else:
-
-                    recommendation_title = (
-                        "⚠ CRITICAL MAINTENANCE REQUIRED"
-                    )
-
-                    recommendation_text = (
-                        "Multiple significant defects were "
-                        "detected. A qualified technician "
-                        "should inspect the PV module."
-                    )
-
-                    recommendation_color = "#ff3864"
-
+            with breakdown_col:
 
                 st.html(
                     f"""
-                    <div class="ai-card">
+                    <div class="report-card">
 
-                        <div style="
-                            color:{recommendation_color};
-                            font-size:18px;
-                            font-weight:850;
+                        <h3 style="
+                            color:#00E5FF;
+                            margin-top:0;
                         ">
-                            {recommendation_title}
-                        </div>
+                            🔍 Detection Breakdown
+                        </h3>
 
-                        <div style="
-                            color:#94a3b8;
-                            line-height:1.7;
-                            margin-top:10px;
+                        <p style="color:#B7C1D0;">
+                            🧹
+                            <b>Soiling / Dust:</b>
+                            {data["dust_status"]}
+                        </p>
+
+                        <p style="color:#B7C1D0;">
+                            💥
+                            <b>Cracks:</b>
+                            {data["crack_status"]}
+                        </p>
+
+                        <p style="color:#B7C1D0;">
+                            🔥
+                            <b>Hotspots:</b>
+                            {data["hotspot_status"]}
+                        </p>
+
+                        <hr style="
+                            border-color:#1D2B3D;
                         ">
-                            {recommendation_text}
-                        </div>
+
+                        <p style="color:#8D9AAC;">
+                            Highest Confidence:
+                            <b style="color:#00E5FF;">
+                                {data["highest_confidence"]:.2f}
+                            </b>
+                        </p>
 
                     </div>
                     """
                 )
 
 
-                # =================================================
-                # SAVE
-                # =================================================
+            with recommendation_col:
 
-                st.markdown("---")
+                if data["priority"] == "HIGH":
+
+                    recommendation = (
+                        "Critical inspection is recommended. "
+                        "Check detected regions and consider "
+                        "professional maintenance."
+                    )
+
+                elif data["total_detections"] > 0:
+
+                    recommendation = (
+                        "Inspect the detected regions and "
+                        "schedule cleaning or maintenance "
+                        "as appropriate."
+                    )
+
+                else:
+
+                    recommendation = (
+                        "No defect was detected. Continue "
+                        "routine inspection and cleaning."
+                    )
 
 
-                record = {
+                st.html(
+                    f"""
+                    <div class="report-card">
 
-                    "Timestamp":
-                        datetime.now().strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        ),
+                        <h3 style="
+                            color:#FFB000;
+                            margin-top:0;
+                        ">
+                            🛠️ AI Recommendation
+                        </h3>
 
-                    "Filename":
-                        uploaded_file.name,
+                        <p style="
+                            color:#AEB8C7;
+                            line-height:1.8;
+                        ">
+                            {recommendation}
+                        </p>
 
-                    "Inspection_Mode":
-                        inspection_mode,
+                    </div>
+                    """
+                )
 
-                    "Panel_Status":
-                        data["panel_status"],
 
-                    "Dust_Status":
-                        data["dust_status"],
+            # ------------------------------------------------
+            # SAVE
+            # ------------------------------------------------
 
-                    "Crack_Status":
-                        data["crack_status"],
+            st.markdown("<br>", unsafe_allow_html=True)
 
-                    "Hotspot_Status":
-                        data["hotspot_status"],
+            save_col = st.columns(
+                [1, 2, 1]
+            )[1]
 
-                    "Health_Score":
-                        data["health_score"],
-
-                    "Priority":
-                        data["priority"],
-
-                    "Detections_Count":
-                        data["total_detections"],
-
-                    "Estimated_Loss_Pct":
-                        f"{data['total_estimated_loss']:.1f}%",
-
-                    "Saved_Image_Path":
-                        ""
-                }
-
+            with save_col:
 
                 if st.button(
                     "💾 SAVE ANALYSIS TO HISTORY",
-                    key="save_record_btn"
+                    use_container_width=True,
+                    key="save_result",
                 ):
 
-                    save_inspection_record(
+                    record = {
+
+                        "Timestamp":
+                            datetime.now().strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            ),
+
+                        "Filename":
+                            uploaded_file.name,
+
+                        "Inspection_Mode":
+                            inspection_mode,
+
+                        "Dust_Status":
+                            data["dust_status"],
+
+                        "Crack_Status":
+                            data["crack_status"],
+
+                        "Hotspot_Status":
+                            data["hotspot_status"],
+
+                        "Health_Score":
+                            data["health_score"],
+
+                        "Priority":
+                            data["priority"],
+
+                        "Detections_Count":
+                            data["total_detections"],
+
+                        "Estimated_Loss_Pct":
+                            f'{data["total_loss"]:.1f}%',
+                    }
+
+                    save_record(
                         record,
                         data["results_img"]
                     )
 
 
     # ========================================================
-    # MAINTENANCE GUIDE
+    # SOLAR MAINTENANCE & SERVICE GUIDE
     # ========================================================
-
-    st.markdown("---")
-
-
-    st.html(
-        """
-        <div class="hero">
-
-            <div class="hero-title"
-                 style="font-size:28px;">
-                🛠️ Solar Panel Care Center
-            </div>
-
-            <div class="hero-subtitle">
-                Practical maintenance guidance for
-                long-term photovoltaic performance.
-            </div>
-
-        </div>
-        """
-    )
-
-
-    guide1, guide2 = st.columns(2)
-
-
-    with guide1:
-
-        st.html(
-            """
+    st.html("""
+    <div style="margin-top:28px;">
+        <div class="section-title">🛠️ SOLAR MAINTENANCE GUIDE</div>
+        <div class="section-subtitle">Practical steps to keep PV modules clean, safe and productive.</div>
+        <div class="metric-grid" style="grid-template-columns:repeat(3,1fr);">
             <div class="report-card">
-
-                <h3 style="
-                    color:#00ff9d;
-                ">
-                    🧼 Owner's Maintenance Guide
-                </h3>
-
-                <h4>
-                    01 • Routine Cleaning
-                </h4>
-
-                <p style="color:#cbd5e1;">
-                    Clean panels approximately every
-                    2–3 months depending on dust,
-                    pollution and local conditions.
+                <h3 style="color:#00E5FF;margin-top:0;">🧼 Routine Cleaning</h3>
+                <p style="color:#AAB7C8;line-height:1.7;font-size:13px;">
+                    Clean when soiling becomes visible or when output drops. Prefer
+                    early morning/evening, soft brushes or sponges and clean/soft water.
+                    Avoid abrasive tools and harsh chemicals.
                 </p>
-
-                <h4>
-                    02 • Correct Timing
-                </h4>
-
-                <p style="color:#cbd5e1;">
-                    Prefer early morning or evening
-                    when panels are cooler.
-                </p>
-
-                <h4>
-                    03 • Water Quality
-                </h4>
-
-                <p style="color:#cbd5e1;">
-                    Soft or de-ionized water can help
-                    reduce mineral spotting.
-                </p>
-
-                <h4>
-                    04 • Safe Tools
-                </h4>
-
-                <p style="color:#cbd5e1;">
-                    Use soft brushes and non-abrasive
-                    cleaning tools. Avoid harsh chemicals.
-                </p>
-
-                <h4>
-                    05 • Visual Inspection
-                </h4>
-
-                <p style="color:#cbd5e1;">
-                    Check for shading, bird droppings,
-                    damaged glass and exposed wiring.
-                </p>
-
             </div>
-            """
-        )
-
-
-    with guide2:
-
-        st.html(
-            """
-            <div class="report-card-warning">
-
-                <h3 style="
-                    color:#ffd43b;
-                ">
-                    📞 Service & Support
-                </h3>
-
-                <p style="
-                    color:#cbd5e1;
-                    line-height:1.7;
-                ">
-                    If the dashboard reports critical
-                    defects or thermal anomalies,
-                    arrange an inspection by a
-                    qualified solar professional.
+            <div class="report-card">
+                <h3 style="color:#00FFB0;margin-top:0;">🔎 Visual Inspection</h3>
+                <p style="color:#AAB7C8;line-height:1.7;font-size:13px;">
+                    Check for cracks, discoloration, loose cables, shading, bird nests,
+                    damaged frames and unusual hotspots. Escalate electrical or structural
+                    faults to qualified technicians.
                 </p>
-
-                <hr>
-
-                <h4>
-                    🛰️ Super Six Technical Support
-                </h4>
-
-                <p style="color:#94a3b8;">
-                    Dashboard Software Integration<br>
-                    AI Model Recalibration<br>
-                    Computer Vision Development
+            </div>
+            <div class="report-card warning">
+                <h3 style="color:#FFB000;margin-top:0;">⚠️ Safety First</h3>
+                <p style="color:#AAB7C8;line-height:1.7;font-size:13px;">
+                    Do not open electrical junction boxes or work on live PV wiring.
+                    For suspected hotspots, damaged modules or wiring faults, contact
+                    a qualified solar service professional.
                 </p>
-
-                <p style="
-                    color:#00e5ff;
-                    font-weight:700;
-                ">
-                    Team: Super Six
-                </p>
-
-                <hr>
-
-                <p style="
-                    color:#64748b;
-                    font-size:12px;
-                ">
-                    Demo project information.
-                    Replace service information with
-                    verified contacts before deployment.
-                </p>
-
             </div>
-            """
-        )
-
-
-# ============================================================
-# ABOUT PAGE
-# ============================================================
-
-with tab_about:
-
-    st.html(
-        """
-        <div class="hero">
-
-            <div class="status-online">
-                <span class="status-dot"></span>
-                SUPER SIX • AI RESEARCH PROJECT
-            </div>
-
-            <div class="hero-title">
-                Solar Vision AI
-            </div>
-
-            <div class="hero-subtitle">
-                Computer vision meets renewable energy
-                maintenance. Detect • Analyze • Predict • Maintain.
-            </div>
-
         </div>
-        """
-    )
 
-
-    a1, a2, a3, a4 = st.columns(4)
-
-
-    about_metrics = [
-
-        ("🧠", "4", "AI Models"),
-
-        ("🔍", "3+", "Defect Types"),
-
-        ("⚡", "YOLOv8", "AI Engine"),
-
-        ("☀️", "PV", "Energy Domain")
-    ]
-
-
-    for col, item in zip(
-        [a1, a2, a3, a4],
-        about_metrics
-    ):
-
-        icon, value, label = item
-
-        with col:
-
-            st.html(
-                f"""
-                <div class="metric-container"
-                     style="text-align:center;">
-
-                    <div style="
-                        font-size:32px;
-                    ">
-                        {icon}
-                    </div>
-
-                    <div style="
-                        font-size:28px;
-                        font-weight:850;
-                        color:#00e5ff;
-                        margin:6px;
-                    ">
-                        {value}
-                    </div>
-
-                    <div style="
-                        color:#94a3b8;
-                        font-size:13px;
-                    ">
-                        {label}
-                    </div>
-
-                </div>
-                """
-            )
-
-
-    st.markdown("")
-
-
-    c1, c2 = st.columns(2)
-
-
-    with c1:
-
-        st.html(
-            """
-            <div class="about-card">
-
-                <h2>
-                    👨‍💻 Project Details
-                </h2>
-
-                <p style="color:#cbd5e1;">
-                    <b>Lead Developer:</b>
-                    Abhijeet Singh
-                </p>
-
-                <p style="color:#cbd5e1;">
-                    <b>Program:</b>
-                    B.Tech
-                </p>
-
-                <p style="color:#cbd5e1;">
-                    <b>Institution:</b>
-                    United Institute of Technology
-                </p>
-
-                <p style="color:#cbd5e1;">
-                    <b>Team:</b>
-                    Super Six
-                </p>
-
-                <hr>
-
-                <h3>
-                    🎯 Core Objectives
-                </h3>
-
-                <p style="color:#94a3b8;">
-                    • Automate PV maintenance inspection
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Detect dust and surface soiling
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Identify cracks and physical defects
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Detect thermal hotspot anomalies
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Estimate potential energy impact
-                </p>
-
-            </div>
-            """
-        )
-
-
-    with c2:
-
-        st.html(
-            """
-            <div class="about-card">
-
-                <h2>
-                    🛠️ Technology Stack
-                </h2>
-
-                <div class="model-pill">
-                    <span>🧠 Deep Learning</span>
-                    <b style="color:#00e5ff;">
-                        YOLOv8
-                    </b>
-                </div>
-
-                <div class="model-pill">
-                    <span>🖥️ Interface</span>
-                    <b style="color:#00ff9d;">
-                        Streamlit
-                    </b>
-                </div>
-
-                <div class="model-pill">
-                    <span>📷 Computer Vision</span>
-                    <b style="color:#ffd43b;">
-                        OpenCV
-                    </b>
-                </div>
-
-                <div class="model-pill">
-                    <span>🖼️ Image Processing</span>
-                    <b style="color:#a855f7;">
-                        PIL
-                    </b>
-                </div>
-
-                <div class="model-pill">
-                    <span>📊 Data Management</span>
-                    <b style="color:#00e5ff;">
-                        Pandas
-                    </b>
-                </div>
-
-                <hr>
-
-                <h3>
-                    🚀 Future Scope
-                </h3>
-
-                <p style="color:#94a3b8;">
-                    • Drone-based autonomous inspection
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Thermal camera integration
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Cloud inspection history
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • Predictive maintenance
-                </p>
-
-                <p style="color:#94a3b8;">
-                    • IoT sensor integration
-                </p>
-
-            </div>
-            """
-        )
-
-
-    st.markdown("")
-
-
-    st.html(
-        """
-        <div class="ai-card"
-             style="text-align:center;">
-
-            <div style="
-                font-size:45px;
-            ">
-                ☀️
-            </div>
-
-            <h2>
-                AI for Clean Energy
-            </h2>
-
-            <p style="
-                color:#94a3b8;
-                max-width:750px;
-                margin:auto;
-                line-height:1.7;
-            ">
-                Solar Vision AI combines computer vision
-                and renewable-energy maintenance workflows
-                to make photovoltaic inspection faster,
-                smarter and more data-driven.
+        <div class="about-card" style="margin-top:14px;">
+            <h3 style="color:#00E5FF;margin-top:0;">📍 SERVICE CENTERS / MAINTENANCE SUPPORT</h3>
+            <p style="color:#8D9AAC;font-size:12px;line-height:1.6;">
+                For the hackathon demo, these are example service categories. Verify
+                phone numbers, availability and authorization before publishing them
+                as official customer contacts.
             </p>
-
+            <div class="team-grid" style="grid-template-columns:repeat(3,1fr);">
+                <div class="team-member" style="text-align:left;">
+                    <b style="color:#EAF2FF;">☀️ Paradise Solar Solutions</b><br>
+                    <span style="color:#7F8A9D;font-size:11px;">50/37A Pura Padin, Baghambari Rd, Daraganj, Prayagraj 211006</span><br>
+                    <span style="color:#00E5FF;font-size:11px;">+91 70072 15437</span>
+                </div>
+                <div class="team-member" style="text-align:left;">
+                    <b style="color:#EAF2FF;">🔧 Om Solar Solutions</b><br>
+                    <span style="color:#7F8A9D;font-size:11px;">205H, 3E, 9R, Radha Kunj, Kalindipuram, Prayagraj 211015</span><br>
+                    <span style="color:#00E5FF;font-size:11px;">+91 99199 90945</span>
+                </div>
+                <div class="team-member" style="text-align:left;">
+                    <b style="color:#EAF2FF;">🔥 MAHAVEER S SOLAR SERVICE</b><br>
+                    <span style="color:#7F8A9D;font-size:11px;">96A/2C/1C, Chak Meera Patti, Harwara, Dhoomanganj, Prayagraj 211011</span><br>
+                    <span style="color:#00E5FF;font-size:11px;">+91 84928 62145</span>
+                </div>
+            </div>
         </div>
-        """
-    )
-
+    </div>
+    """)
 
 # ============================================================
-# HISTORY PAGE
+# HISTORY
 # ============================================================
 
 with tab_history:
 
-    st.html(
+    st.markdown(
         """
-        <div class="hero">
-
-            <div class="status-online">
-                <span class="status-dot"></span>
-                INSPECTION DATABASE
-            </div>
-
-            <div class="hero-title"
-                 style="font-size:34px;">
-                📁 Inspection History
-            </div>
-
-            <div class="hero-subtitle">
-                Review previous AI inspections,
-                detection results and analyzed images.
-            </div>
-
+        <div class="section-title">
+            📁 Inspection History
         </div>
-        """
+
+        <div class="section-subtitle">
+            Review saved AI inspection reports.
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
 
@@ -3171,305 +2312,92 @@ with tab_history:
 
         if not history_df.empty:
 
-            # =================================================
-            # SUMMARY
-            # =================================================
-
-            h1, h2, h3, h4 = st.columns(4)
-
-
-            total_records = len(
-                history_df
-            )
-
-
-            if "Detections_Count" in history_df.columns:
-
-                total_defects = pd.to_numeric(
-                    history_df[
-                        "Detections_Count"
-                    ],
-                    errors="coerce"
-                ).fillna(0).sum()
-
-            else:
-
-                total_defects = 0
-
-
-            if "Priority" in history_df.columns:
-
-                high_priority = (
-                    history_df[
-                        history_df[
-                            "Priority"
-                        ]
-                        .astype(str)
-                        .str.upper()
-                        == "HIGH"
-                    ].shape[0]
-                )
-
-            else:
-
-                high_priority = 0
-
-
-            with h1:
-
-                st.html(
-                    f"""
-                    <div class="metric-container">
-
-                        <small style="
-                            color:#94a3b8;
-                        ">
-                            📁 INSPECTIONS
-                        </small>
-
-                        <h2 style="
-                            color:#00e5ff;
-                        ">
-                            {total_records}
-                        </h2>
-
-                    </div>
-                    """
-                )
-
-
-            with h2:
-
-                st.html(
-                    f"""
-                    <div class="metric-container">
-
-                        <small style="
-                            color:#94a3b8;
-                        ">
-                            🔎 TOTAL DEFECTS
-                        </small>
-
-                        <h2 style="
-                            color:#ffd43b;
-                        ">
-                            {int(total_defects)}
-                        </h2>
-
-                    </div>
-                    """
-                )
-
-
-            with h3:
-
-                st.html(
-                    f"""
-                    <div class="metric-container">
-
-                        <small style="
-                            color:#94a3b8;
-                        ">
-                            ⚠️ HIGH PRIORITY
-                        </small>
-
-                        <h2 style="
-                            color:#ff3864;
-                        ">
-                            {high_priority}
-                        </h2>
-
-                    </div>
-                    """
-                )
-
-
-            with h4:
-
-                st.html(
-                    """
-                    <div class="metric-container">
-
-                        <small style="
-                            color:#94a3b8;
-                        ">
-                            🛰️ SYSTEM
-                        </small>
-
-                        <h2 style="
-                            color:#00ff9d;
-                        ">
-                            ONLINE
-                        </h2>
-
-                    </div>
-                    """
-                )
-
-
-            st.markdown("---")
-
-
-            # =================================================
-            # TABLE
-            # =================================================
-
-            st.subheader(
-                "📊 Inspection Log"
-            )
-
-
-            preferred_columns = [
+            columns_to_show = [
                 "Timestamp",
                 "Filename",
                 "Inspection_Mode",
-                "Panel_Status",
                 "Dust_Status",
                 "Crack_Status",
                 "Hotspot_Status",
                 "Health_Score",
                 "Priority",
                 "Detections_Count",
-                "Estimated_Loss_Pct"
+                "Estimated_Loss_Pct",
             ]
 
-
-            display_columns = [
-                column
-                for column in preferred_columns
-                if column in history_df.columns
+            available = [
+                c
+                for c in columns_to_show
+                if c in history_df.columns
             ]
-
 
             st.dataframe(
-                history_df[
-                    display_columns
-                ],
+                history_df[available],
                 use_container_width=True,
-                hide_index=True
+                hide_index=True,
             )
 
 
             st.markdown("---")
 
-
-            # =================================================
-            # GALLERY
-            # =================================================
-
             st.subheader(
-                "🖼️ Visual Inspection Gallery"
+                "🖼️ Saved Visual Reports"
             )
 
 
             for _, row in history_df.iterrows():
 
-                timestamp = row.get(
-                    "Timestamp",
-                    "Unknown"
-                )
-
-                filename = row.get(
-                    "Filename",
-                    "Unknown"
-                )
-
-                health = row.get(
-                    "Health_Score",
-                    "N/A"
-                )
-
-                priority = row.get(
-                    "Priority",
-                    "N/A"
-                )
-
-
                 title = (
-                    f"📌 {timestamp} | "
-                    f"{filename} | "
-                    f"Health: {health} | "
-                    f"Priority: {priority}"
+                    f'📌 {row.get("Timestamp", "")} | '
+                    f'{row.get("Filename", "")} | '
+                    f'Health: {row.get("Health_Score", "N/A")}'
                 )
-
 
                 with st.expander(title):
 
-                    info_col, img_col = (
-                        st.columns(2)
+                    info_col, image_col = st.columns(
+                        [1, 1]
                     )
-
 
                     with info_col:
 
                         st.html(
                             f"""
-                            <div class="ai-card">
+                            <div class="history-item">
 
                                 <p>
-                                    <b>Inspection Mode:</b>
-                                    {row.get(
-                                        'Inspection_Mode',
-                                        'N/A'
-                                    )}
-                                </p>
-
-                                <p>
-                                    <b>Panel:</b>
-                                    {row.get(
-                                        'Panel_Status',
-                                        'N/A'
-                                    )}
+                                    <b>Mode:</b>
+                                    {row.get("Inspection_Mode", "N/A")}
                                 </p>
 
                                 <p>
                                     <b>Dust:</b>
-                                    {row.get(
-                                        'Dust_Status',
-                                        'N/A'
-                                    )}
+                                    {row.get("Dust_Status", "N/A")}
                                 </p>
 
                                 <p>
                                     <b>Cracks:</b>
-                                    {row.get(
-                                        'Crack_Status',
-                                        'N/A'
-                                    )}
+                                    {row.get("Crack_Status", "N/A")}
                                 </p>
 
                                 <p>
                                     <b>Hotspots:</b>
-                                    {row.get(
-                                        'Hotspot_Status',
-                                        'N/A'
-                                    )}
+                                    {row.get("Hotspot_Status", "N/A")}
                                 </p>
 
                                 <p>
-                                    <b>Health Score:</b>
-                                    {health}
-                                </p>
-
-                                <p>
-                                    <b>Estimated Loss:</b>
-                                    {row.get(
-                                        'Estimated_Loss_Pct',
-                                        'N/A'
-                                    )}
+                                    <b>Health:</b>
+                                    {row.get("Health_Score", "N/A")}
                                 </p>
 
                                 <p>
                                     <b>Priority:</b>
-                                    {priority}
+                                    {row.get("Priority", "N/A")}
                                 </p>
 
                                 <p>
-                                    <b>Defects:</b>
-                                    {row.get(
-                                        'Detections_Count',
-                                        'N/A'
-                                    )}
+                                    <b>Power Loss:</b>
+                                    {row.get("Estimated_Loss_Pct", "N/A")}
                                 </p>
 
                             </div>
@@ -3477,7 +2405,7 @@ with tab_history:
                         )
 
 
-                    with img_col:
+                    with image_col:
 
                         image_path = str(
                             row.get(
@@ -3486,59 +2414,44 @@ with tab_history:
                             )
                         )
 
-
                         if (
                             image_path
                             and image_path != "nan"
-                            and os.path.exists(
-                                image_path
-                            )
+                            and os.path.exists(image_path)
                         ):
 
                             st.image(
                                 image_path,
-                                caption="AI Analyzed Output",
                                 use_container_width=True
                             )
 
                         else:
 
                             st.warning(
-                                "⚠️ Saved image not found."
+                                "Saved image not found."
                             )
 
 
-            # =================================================
-            # EXPORT / CLEAR
-            # =================================================
-
             st.markdown("---")
 
-
-            export_col, clear_col = (
-                st.columns(2)
-            )
-
+            export_col, clear_col = st.columns(2)
 
             with export_col:
 
-                csv_data = (
-                    history_df
-                    .to_csv(index=False)
-                    .encode("utf-8")
-                )
-
+                csv_data = history_df.to_csv(
+                    index=False
+                ).encode("utf-8")
 
                 st.download_button(
-                    label="📥 EXPORT INSPECTION CSV",
+                    "📥 EXPORT CSV",
                     data=csv_data,
                     file_name=(
-                        "Solar_Inspection_Report_"
-                        f"{datetime.now().strftime('%Y%m%d')}"
-                        ".csv"
+                        "Super_Six_Inspection_Report_"
+                        + datetime.now().strftime("%Y%m%d")
+                        + ".csv"
                     ),
                     mime="text/csv",
-                    key="export_csv_btn"
+                    use_container_width=True,
                 )
 
 
@@ -3546,58 +2459,332 @@ with tab_history:
 
                 if st.button(
                     "🗑️ CLEAR HISTORY",
-                    key="clear_history_btn"
+                    use_container_width=True,
+                    key="clear_history",
                 ):
 
-                    if os.path.exists(
-                        CSV_FILE
-                    ):
+                    try:
 
-                        os.remove(
-                            CSV_FILE
-                        )
+                        os.remove(CSV_FILE)
 
-                    init_data_storage()
+                    except FileNotFoundError:
+
+                        pass
+
+                    initialize_storage()
 
                     st.rerun()
 
-
         else:
 
-            st.html(
-                """
-                <div class="ai-card"
-                     style="
-                        text-align:center;
-                        padding:60px;
-                     ">
-
-                    <div style="
-                        font-size:55px;
-                    ">
-                        📁
-                    </div>
-
-                    <h2>
-                        No Inspections Yet
-                    </h2>
-
-                    <p style="
-                        color:#64748b;
-                    ">
-                        Run an AI inspection and save
-                        the result to create your history.
-                    </p>
-
-                </div>
-                """
+            st.info(
+                "📁 No saved inspections yet."
             )
 
     else:
 
         st.info(
-            "No inspection history found."
+            "📁 No inspection history available."
         )
+
+
+# ============================================================
+# ABOUT PROJECT
+# ============================================================
+
+with tab_about:
+
+    st.markdown(
+        """
+        <div class="section-title">
+            ℹ️ About Super Six
+        </div>
+
+        <div class="section-subtitle">
+            AI-powered solar panel inspection platform.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+    # --------------------------------------------------------
+    # PROJECT
+    # --------------------------------------------------------
+
+    st.html(
+        """
+        <div class="about-card">
+
+            <h2 style="
+                color:white;
+                margin-top:0;
+            ">
+                ☀️ Super Six — Solar Vision AI
+            </h2>
+
+            <p style="
+                color:#9BA4B5;
+                font-size:16px;
+                line-height:1.8;
+            ">
+                Super Six is an AI-powered computer vision
+                platform designed to assist solar panel
+                inspection and maintenance.
+            </p>
+
+            <p style="
+                color:#9BA4B5;
+                line-height:1.8;
+            ">
+                Our trained YOLO models analyze inspection
+                images to identify surface soiling,
+                structural cracks and thermal hotspot patterns.
+            </p>
+
+        </div>
+        """
+    )
+
+
+    # --------------------------------------------------------
+    # TEAM
+    # --------------------------------------------------------
+
+    st.html(
+        """
+        <div class="about-card">
+
+            <h2 style="
+                color:white;
+                margin-top:0;
+            ">
+                👥 Team Super Six
+            </h2>
+
+            <p style="
+                color:#748196;
+            ">
+                Six minds. One vision. Smarter solar maintenance.
+            </p>
+
+            <div class="team-grid">
+
+                <div class="team-member">
+                    <div style="font-size:28px;">
+                        👨‍💻
+                    </div>
+                    <b>Abhijeet</b>
+                </div>
+
+                <div class="team-member">
+                    <div style="font-size:28px;">
+                        👩‍💻
+                    </div>
+                    <b>Nidhi</b>
+                </div>
+
+                <div class="team-member">
+                    <div style="font-size:28px;">
+                        👨‍💻
+                    </div>
+                    <b>Ansh</b>
+                </div>
+
+                <div class="team-member">
+                    <div style="font-size:28px;">
+                        👨‍💻
+                    </div>
+                    <b>Anubhav</b>
+                </div>
+
+                <div class="team-member">
+                    <div style="font-size:28px;">
+                        👩‍💻
+                    </div>
+                    <b>Akanksha</b>
+                </div>
+
+                <div class="team-member">
+                    <div style="font-size:28px;">
+                        👩‍💻
+                    </div>
+                    <b>Trisha</b>
+                </div>
+
+            </div>
+
+        </div>
+        """
+    )
+
+
+    # --------------------------------------------------------
+    # TECHNOLOGY
+    # --------------------------------------------------------
+
+    tech1, tech2 = st.columns(2)
+
+    with tech1:
+
+        st.html(
+            """
+            <div class="about-card">
+
+                <h3 style="color:#00E5FF;">
+                    🧠 AI Technology
+                </h3>
+
+                <p style="color:#AEB8C7;">
+                    🤖 YOLO Object Detection
+                </p>
+
+                <p style="color:#AEB8C7;">
+                    👁️ Computer Vision
+                </p>
+
+                <p style="color:#AEB8C7;">
+                    🔬 OpenCV
+                </p>
+
+                <p style="color:#AEB8C7;">
+                    🎯 Custom Trained Models
+                </p>
+
+            </div>
+            """
+        )
+
+
+    with tech2:
+
+        st.html(
+            """
+            <div class="about-card">
+
+                <h3 style="color:#FFB000;">
+                    ⚙️ Application Stack
+                </h3>
+
+                <p style="color:#AEB8C7;">
+                    🐍 Python
+                </p>
+
+                <p style="color:#AEB8C7;">
+                    🌐 Streamlit
+                </p>
+
+                <p style="color:#AEB8C7;">
+                    📊 Pandas
+                </p>
+
+                <p style="color:#AEB8C7;">
+                    🖼️ PIL
+                </p>
+
+            </div>
+            """
+        )
+
+
+    # --------------------------------------------------------
+    # FEATURES
+    # --------------------------------------------------------
+
+    st.html(
+        """
+        <div class="about-card">
+
+            <h2 style="
+                color:white;
+                margin-top:0;
+            ">
+                🚀 Key Features
+            </h2>
+
+            <div class="team-grid">
+
+                <div class="team-member">
+                    🧹<br>
+                    <b>Soiling Detection</b>
+                </div>
+
+                <div class="team-member">
+                    💥<br>
+                    <b>Crack Detection</b>
+                </div>
+
+                <div class="team-member">
+                    🔥<br>
+                    <b>Hotspot Detection</b>
+                </div>
+
+                <div class="team-member">
+                    📊<br>
+                    <b>Health Scoring</b>
+                </div>
+
+                <div class="team-member">
+                    ⚡<br>
+                    <b>Power Loss Estimation</b>
+                </div>
+
+                <div class="team-member">
+                    📁<br>
+                    <b>Inspection History</b>
+                </div>
+
+            </div>
+
+        </div>
+        """
+    )
+
+
+    # --------------------------------------------------------
+    # LEAD DEVELOPER
+    # --------------------------------------------------------
+
+    st.html(
+        """
+        <div class="lead-card">
+
+            <div style="
+                font-size:35px;
+                margin-bottom:8px;
+            ">
+                👑
+            </div>
+
+            <div style="
+                color:#FFB000;
+                font-size:12px;
+                font-weight:800;
+                letter-spacing:1.5px;
+            ">
+                LEAD DEVELOPER
+            </div>
+
+            <div style="
+                color:white;
+                font-size:25px;
+                font-weight:900;
+                margin-top:6px;
+            ">
+                Abhijeet Singh
+            </div>
+
+            <div style="
+                color:#78869A;
+                font-size:12px;
+                margin-top:5px;
+            ">
+                Super Six • Solar Vision AI
+            </div>
+
+        </div>
+        """
+    )
 
 
 # ============================================================
@@ -3606,41 +2793,17 @@ with tab_history:
 
 st.html(
     """
-    <div style="
-        margin-top:70px;
-        padding:30px;
+    <div class="footer">
 
-        text-align:center;
+        ☀️ <b>SUPER SIX — SOLAR VISION AI</b>
 
-        border-top:
-            1px solid rgba(255,255,255,0.08);
+        <br><br>
 
-        color:#64748b;
-    ">
+        Detect • Analyze • Predict • Maintain
 
-        <div style="
-            font-size:22px;
-            font-weight:850;
-            color:#00e5ff;
-            letter-spacing:2px;
-        ">
-            ☀️ SOLAR VISION
-        </div>
+        <br><br>
 
-        <div style="
-            margin-top:8px;
-            font-size:12px;
-        ">
-            Powered by YOLOv8 • OpenCV • Streamlit • Python
-        </div>
-
-        <div style="
-            margin-top:8px;
-            font-size:11px;
-            color:#475569;
-        ">
-            SUPER SIX • AI FOR CLEAN ENERGY
-        </div>
+        Built for the future of renewable energy ⚡
 
     </div>
     """
