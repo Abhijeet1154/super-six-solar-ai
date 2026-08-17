@@ -35,6 +35,21 @@ MODEL_FILES = {
     "hotspot": "hotspot_model.pt",
 }
 
+# ── Estimation constants (single source of truth) ─────────────
+DUST_LOSS_PER    = 2.5    # % loss per detected dust region
+DUST_LOSS_MAX    = 30.0   # cap
+CRACK_LOSS_PER   = 5.0
+CRACK_LOSS_MAX   = 40.0
+HOTSPOT_LOSS_PER = 15.0
+HOTSPOT_LOSS_MAX = 60.0
+
+# Health-score penalty per detection (weighted by severity)
+DUST_HEALTH_PEN    = 3
+CRACK_HEALTH_PEN   = 8
+HOTSPOT_HEALTH_PEN = 20
+
+MAX_UPLOAD_MB = 15        # Reject images larger than this
+
 
 # ============================================================
 # DARK FUTURISTIC CSS
@@ -880,6 +895,95 @@ footer {
     }
 }
 
+
+/* ============================================================
+   STREAMLIT SHELL RESET — FORCE FULL DARK VIEWPORT
+   ============================================================ */
+
+/* The white strip above the application is Streamlit's header/chrome. */
+html,
+body,
+#root,
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"],
+.stApp {
+    background-color: #02050A !important;
+    color: #F5F7FA !important;
+}
+
+/* Completely remove the default Streamlit header area. */
+header[data-testid="stHeader"] {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    background: #02050A !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+/* Extra protection for Streamlit's header children. */
+header[data-testid="stHeader"] *,
+[data-testid="stToolbar"],
+[data-testid="stDecoration"] {
+    background-color: #02050A !important;
+}
+
+/* Make the main app start at the very top. */
+[data-testid="stAppViewContainer"] {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+[data-testid="stMain"] {
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+    background-color: #02050A !important;
+}
+
+section.main {
+    background-color: #02050A !important;
+}
+
+section.main > div {
+    padding-top: 0 !important;
+}
+
+/* Remove any accidental white root/background surfaces. */
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+[data-testid="stColumn"],
+[data-testid="stElementContainer"] {
+    background: transparent !important;
+}
+
+/* Main content spacing — no large blank band at the top. */
+.block-container {
+    padding-top: 0.65rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1450px !important;
+}
+
+/* Keep uploader, dropdowns and controls dark too. */
+[data-testid="stFileUploader"],
+[data-testid="stFileUploaderDropzone"],
+[data-baseweb="select"] > div,
+[data-testid="stTextInput"] > div,
+[data-testid="stNumberInput"] > div {
+    background-color: #07121D !important;
+}
+
+/* Streamlit buttons must remain readable. */
+.stButton > button {
+    color: #FFFFFF !important;
+}
+
+/* Kill the footer/background if Streamlit renders it. */
+footer,
+[data-testid="stFooter"] {
+    background: #02050A !important;
+    color: #02050A !important;
+}
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -944,10 +1048,15 @@ def save_record(record, image_array):
 
     record["Saved_Image_Path"] = image_path
 
+    # Write header only when the file is empty or brand-new
+    _write_header = (
+        not os.path.exists(CSV_FILE)
+        or os.path.getsize(CSV_FILE) == 0
+    )
     pd.DataFrame([record]).to_csv(
         CSV_FILE,
         mode="a",
-        header=not os.path.exists(CSV_FILE),
+        header=_write_header,
         index=False,
     )
 
@@ -1293,8 +1402,23 @@ with tab_inspect:
 # ========================================================
     if run_analysis:
 
+        # ── Guard: image must be uploaded ────────────────────────
+        if uploaded_file is None:
+            st.error(
+                "❌ Please upload a solar panel image before running analysis."
+            )
+            st.stop()
+
+        # ── Guard: reject oversized files ────────────────────────
+        if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
+            st.error(
+                f"❌ File too large ({uploaded_file.size / 1024 / 1024:.1f} MB). "
+                f"Max allowed size is {MAX_UPLOAD_MB} MB."
+            )
+            st.stop()
+
         with st.spinner(
-            "🧠 Running Super Six AI models..."
+            "🧠 Running Super Six AI models…"
         ):
 
             output_bgr = original_bgr.copy()
@@ -1592,18 +1716,18 @@ with tab_inspect:
             # ============================================
 
             dust_loss = min(
-                dust_count * 2.5,
-                30.0
+                dust_count * DUST_LOSS_PER,
+                DUST_LOSS_MAX
             )
 
             crack_loss = min(
-                crack_count * 5.0,
-                40.0
+                crack_count * CRACK_LOSS_PER,
+                CRACK_LOSS_MAX
             )
 
             hotspot_loss = min(
-                hotspot_count * 15.0,
-                60.0
+                hotspot_count * HOTSPOT_LOSS_PER,
+                HOTSPOT_LOSS_MAX
             )
 
             total_loss = min(
@@ -1627,10 +1751,13 @@ with tab_inspect:
 
             else:
 
+                # Weighted penalty: hotspots hurt more than dust
                 health_numeric = max(
                     0,
                     100 - (
-                        total_detections * 15
+                        dust_count    * DUST_HEALTH_PEN
+                        + crack_count   * CRACK_HEALTH_PEN
+                        + hotspot_count * HOTSPOT_HEALTH_PEN
                     ),
                 )
 
@@ -1721,9 +1848,16 @@ with tab_inspect:
                     highest_confidence,
                 "detection_details":
                     detection_details,
+                # Store image dimensions so the report can use
+                # them without relying on locals() or re-decoding.
+                "image_w":
+                    image_w,
+                "image_h":
+                    image_h,
             }
 
-            st.rerun()
+        # ── Rerun AFTER the spinner context exits cleanly ────────
+        st.rerun()
 
 
     # ========================================================
@@ -1757,9 +1891,9 @@ with tab_inspect:
             # DETAILED AI INSPECTION REPORT
             # ------------------------------------------------
             details = data.get("detection_details", [])
-            dust_loss = min(data["dust_count"] * 2.5, 30.0)
-            crack_loss = min(data["crack_count"] * 5.0, 40.0)
-            hotspot_loss = min(data["hotspot_count"] * 15.0, 60.0)
+            dust_loss    = min(data["dust_count"]    * DUST_LOSS_PER,    DUST_LOSS_MAX)
+            crack_loss   = min(data["crack_count"]   * CRACK_LOSS_PER,   CRACK_LOSS_MAX)
+            hotspot_loss = min(data["hotspot_count"] * HOTSPOT_LOSS_PER, HOTSPOT_LOSS_MAX)
 
             st.markdown(
                 """
@@ -1798,17 +1932,12 @@ with tab_inspect:
             # Region-by-region details are available when the YOLO model returns boxes.
             if details:
                 rows = []
+                # Use image dimensions stored in session_state (no locals() hack)
+                _iw = data.get("image_w") or 1
+                _ih = data.get("image_h") or 1
                 for idx, item in enumerate(details, 1):
-                    cx = ((item["x1"] + item["x2"]) / 2) / max(1, image_w) * 100 if "image_w" in locals() else 0
-                    cy = ((item["y1"] + item["y2"]) / 2) / max(1, image_h) * 100 if "image_h" in locals() else 0
-                    # image dimensions are reconstructed from the uploaded image when available
-                    if uploaded_file is not None:
-                        try:
-                            ih, iw = original_bgr.shape[:2]
-                            cx = ((item["x1"] + item["x2"]) / 2) / iw * 100
-                            cy = ((item["y1"] + item["y2"]) / 2) / ih * 100
-                        except Exception:
-                            pass
+                    cx = ((item["x1"] + item["x2"]) / 2) / _iw * 100
+                    cy = ((item["y1"] + item["y2"]) / 2) / _ih * 100
                     rows.append(
                         f"""<tr><td>{idx}</td><td><b>{item["type"]}</b></td><td>{item["confidence"]:.2f}</td>
                         <td>{cx:.0f}% across / {cy:.0f}% down</td><td>{item["area_pct"]:.2f}% of image</td></tr>"""
