@@ -1,4 +1,6 @@
+import io
 import os
+import re
 from datetime import datetime
 
 import cv2
@@ -7,6 +9,16 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 from ultralytics import YOLO
+
+try:
+    import pymupdf as fitz  # PyMuPDF ≥ 1.24 — preferred import name
+    _FITZ_AVAILABLE = True
+except ImportError:
+    try:
+        import fitz  # Fallback for older PyMuPDF
+        _FITZ_AVAILABLE = True
+    except ImportError:
+        _FITZ_AVAILABLE = False
 
 
 # ============================================================
@@ -1104,6 +1116,175 @@ models = load_models()
 
 
 # ============================================================
+# HELPER: ANALYSE A SINGLE BGR IMAGE
+# ============================================================
+
+def analyse_single_image(bgr, mode, conf):
+    """Run dust/crack/hotspot YOLO models on one BGR image.
+
+    Returns a dict with all detection counts, annotated RGB image,
+    health score, efficiency, priority and detection details.
+    """
+    output_bgr = bgr.copy()
+    image_h, image_w = bgr.shape[:2]
+
+    total_detections = 0
+    confidence_values = []
+    detection_details = []
+
+    dust_count = crack_count = hotspot_count = 0
+    dust_status = crack_status = hotspot_status = "UNTESTED"
+
+    # ── Dust ────────────────────────────────────────────────
+    if mode in ("Dust Detection", "Comprehensive Analysis"):
+        model = models.get("dust")
+        if model is not None:
+            result = model(bgr, conf=conf, verbose=False)[0]
+            dust_count = len(result.boxes)
+            total_detections += dust_count
+            dust_status = f"DETECTED ({dust_count} regions)" if dust_count else "NONE"
+            for box in result.boxes:
+                c = float(box.conf[0])
+                confidence_values.append(c)
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                area_pct = max(0,x2-x1)*max(0,y2-y1)/max(1,image_w*image_h)*100
+                detection_details.append({"type":"Soiling / Dust","confidence":c,"x1":x1,"y1":y1,"x2":x2,"y2":y2,"area_pct":area_pct})
+                cv2.rectangle(output_bgr,(x1,y1),(x2,y2),(255,190,0),3)
+                cv2.putText(output_bgr,f"DUST {c:.2f}",(x1,max(25,y1-10)),cv2.FONT_HERSHEY_SIMPLEX,0.8,(255,190,0),2,cv2.LINE_AA)
+        else:
+            dust_status = "MODEL MISSING"
+
+    # ── Crack ───────────────────────────────────────────────
+    if mode in ("Crack Detection", "Comprehensive Analysis"):
+        model = models.get("crack")
+        if model is not None:
+            result = model(bgr, conf=conf, verbose=False)[0]
+            crack_count = len(result.boxes)
+            total_detections += crack_count
+            crack_status = f"DETECTED ({crack_count} regions)" if crack_count else "NONE"
+            for box in result.boxes:
+                c = float(box.conf[0])
+                confidence_values.append(c)
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                area_pct = max(0,x2-x1)*max(0,y2-y1)/max(1,image_w*image_h)*100
+                detection_details.append({"type":"Structural Crack","confidence":c,"x1":x1,"y1":y1,"x2":x2,"y2":y2,"area_pct":area_pct})
+                cv2.rectangle(output_bgr,(x1,y1),(x2,y2),(255,70,90),3)
+                cv2.putText(output_bgr,f"CRACK {c:.2f}",(x1,max(25,y1-10)),cv2.FONT_HERSHEY_SIMPLEX,0.8,(255,70,90),2,cv2.LINE_AA)
+        else:
+            crack_status = "MODEL MISSING"
+
+    # ── Hotspot ─────────────────────────────────────────────
+    if mode in ("Hotspot Detection", "Comprehensive Analysis"):
+        model = models.get("hotspot")
+        if model is not None:
+            result = model(bgr, conf=conf, verbose=False)[0]
+            hotspot_count = len(result.boxes)
+            total_detections += hotspot_count
+            hotspot_status = f"DETECTED ({hotspot_count} regions)" if hotspot_count else "NONE"
+            for box in result.boxes:
+                c = float(box.conf[0])
+                confidence_values.append(c)
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                area_pct = max(0,x2-x1)*max(0,y2-y1)/max(1,image_w*image_h)*100
+                detection_details.append({"type":"Thermal Hotspot","confidence":c,"x1":x1,"y1":y1,"x2":x2,"y2":y2,"area_pct":area_pct})
+                cv2.rectangle(output_bgr,(x1,y1),(x2,y2),(0,170,255),3)
+                cv2.putText(output_bgr,f"HOTSPOT {c:.2f}",(x1,max(25,y1-10)),cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,170,255),2,cv2.LINE_AA)
+        else:
+            hotspot_status = "MODEL MISSING"
+
+    # ── Scoring ─────────────────────────────────────────────
+    dust_loss    = min(dust_count    * DUST_LOSS_PER,    DUST_LOSS_MAX)
+    crack_loss   = min(crack_count   * CRACK_LOSS_PER,   CRACK_LOSS_MAX)
+    hotspot_loss = min(hotspot_count * HOTSPOT_LOSS_PER, HOTSPOT_LOSS_MAX)
+    total_loss   = min(dust_loss + crack_loss + hotspot_loss, 100.0)
+    efficiency   = max(0.0, 100.0 - total_loss)
+
+    if total_detections == 0:
+        health_numeric = 100
+        priority = "LOW"
+    else:
+        health_numeric = max(0, 100 - (
+            dust_count    * DUST_HEALTH_PEN
+            + crack_count   * CRACK_HEALTH_PEN
+            + hotspot_count * HOTSPOT_HEALTH_PEN
+        ))
+        priority = "HIGH" if health_numeric < 50 else "MEDIUM"
+
+    avg_confidence     = sum(confidence_values)/len(confidence_values) if confidence_values else 0.0
+    highest_confidence = max(confidence_values) if confidence_values else 0.0
+    output_rgb = cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
+
+    return {
+        "results_img":        output_rgb,
+        "total_detections":   total_detections,
+        "dust_count":         dust_count,
+        "crack_count":        crack_count,
+        "hotspot_count":      hotspot_count,
+        "dust_status":        dust_status,
+        "crack_status":       crack_status,
+        "hotspot_status":     hotspot_status,
+        "dust_loss":          dust_loss,
+        "crack_loss":         crack_loss,
+        "hotspot_loss":       hotspot_loss,
+        "total_loss":         total_loss,
+        "efficiency":         efficiency,
+        "health_numeric":     health_numeric,
+        "health_score":       f"{health_numeric}/100",
+        "priority":           priority,
+        "avg_confidence":     avg_confidence,
+        "highest_confidence": highest_confidence,
+        "detection_details":  detection_details,
+        "image_w":            image_w,
+        "image_h":            image_h,
+    }
+
+
+# ============================================================
+# HELPER: PDF → LIST OF BGR IMAGES
+# ============================================================
+
+def pdf_to_images(pdf_bytes: bytes) -> list:
+    """Convert every page of a PDF to a BGR NumPy array at 150 DPI."""
+    if not _FITZ_AVAILABLE:
+        return []
+    images = []
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        mat = fitz.Matrix(150 / 72, 150 / 72)  # 150 DPI
+        for page in doc:
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+            img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, 3
+            )
+            images.append(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR))
+        doc.close()
+    except Exception as e:
+        st.error(f"PDF conversion error: {e}")
+    return images
+
+
+def pdf_to_images_iter(pdf_bytes: bytes):
+    """Yield PDF pages one-by-one as BGR NumPy arrays to keep memory low."""
+    if not _FITZ_AVAILABLE:
+        return
+    doc = None
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        mat = fitz.Matrix(150 / 72, 150 / 72)
+        for page in doc:
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+            img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, 3
+            )
+            yield cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        st.error(f"PDF conversion error: {e}")
+    finally:
+        if doc is not None:
+            doc.close()
+
+
+# ============================================================
 # HEADER
 # ============================================================
 
@@ -1151,9 +1332,10 @@ st.html("""
 # TABS
 # ============================================================
 
-tab_inspect, tab_history, tab_about = st.tabs(
+tab_inspect, tab_batch, tab_history, tab_about = st.tabs(
     [
         "🔬 INSPECT",
+        "📄 BATCH / PDF ANALYSIS",
         "📁 INSPECTION HISTORY",
         "ℹ️ ABOUT PROJECT",
     ]
@@ -2404,6 +2586,561 @@ with tab_inspect:
         </div>
     </div>
     """)
+
+# ============================================================
+# BATCH / PDF ANALYSIS TAB
+# ============================================================
+
+with tab_batch:
+
+    st.html("""
+    <div class="section-title">📦 BULK SOLAR INSPECTION
+        <span style="font-size:10px;color:#00FFB0;border:1px solid #00FFB0;
+                     padding:4px 8px;border-radius:99px;vertical-align:middle;margin-left:8px;">
+        MULTI-FILE RUN</span>
+    </div>
+    <div class="section-subtitle">
+        Upload multiple images and multiple PDFs. Every PDF page is automatically
+        converted into an inspection image and everything runs from one button.
+    </div>
+    """)
+
+    b_ctrl, b_results = st.columns([0.9, 2.1], gap="large")
+
+    with b_ctrl:
+        st.html('<div class="control-card" style="padding:20px;">'
+                '<div style="color:#00E5FF;font-size:13px;font-weight:800;'
+                'letter-spacing:.5px;margin-bottom:10px;">⚙️ BULK ANALYSIS CONTROL</div></div>')
+
+        batch_mode = st.selectbox(
+            "Inspection Mode",
+            ["Dust Detection", "Crack Detection", "Hotspot Detection", "Comprehensive Analysis"],
+            key="batch_mode",
+        )
+
+        batch_conf = st.slider(
+            "🎯 AI Confidence Threshold",
+            0.05, 1.00, 0.40, 0.05,
+            key="batch_conf",
+        )
+
+        st.markdown(
+            '<div style="margin-top:10px;margin-bottom:6px;color:#00E5FF;'
+            'font-size:10px;font-weight:900;letter-spacing:1px;">INPUT QUEUE</div>',
+            unsafe_allow_html=True,
+        )
+
+        # One uploader accepts any mix of PDFs and images.
+        batch_files = st.file_uploader(
+            "📦 Upload Multiple PDFs + Images",
+            type=["pdf", "jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="batch_all_files_upload",
+            help="Select many PDFs and images together. PDF pages are analysed automatically.",
+        )
+
+        pdf_files = []
+        image_files = []
+        pdf_page_count = 0
+        queue_errors = []
+
+        for uf in (batch_files or []):
+            ext = os.path.splitext(uf.name)[1].lower()
+            if ext == ".pdf":
+                pdf_files.append(uf)
+                if not _FITZ_AVAILABLE:
+                    continue
+                try:
+                    if uf.size > 100 * 1024 * 1024:
+                        queue_errors.append(f"{uf.name}: PDF exceeds 100 MB and will be skipped.")
+                        continue
+                    doc = fitz.open(stream=uf.getvalue(), filetype="pdf")
+                    pdf_page_count += len(doc)
+                    doc.close()
+                except Exception as e:
+                    queue_errors.append(f"{uf.name}: cannot read PDF ({e}).")
+            else:
+                image_files.append(uf)
+
+        img_count = len(image_files)
+        pdf_count = len(pdf_files)
+        total_count = pdf_page_count + img_count
+
+        if queue_errors:
+            for msg in queue_errors:
+                st.warning("⚠️ " + msg)
+
+        st.markdown(
+            f"""
+            <div style="margin-top:14px;padding:14px;border:1px solid #173E56;
+                        border-radius:14px;background:#06111C;font-size:12px;">
+                <div style="color:#00FFB0;font-weight:900;letter-spacing:.6px;">📦 LIVE QUEUE</div>
+                <div style="color:#AAB7C8;margin-top:7px;line-height:2.0;">
+                    📄 PDF files : <b style="color:#F4F8FF;">{pdf_count}</b><br>
+                    📑 PDF pages : <b style="color:#F4F8FF;">{pdf_page_count}</b><br>
+                    🖼️ Images    : <b style="color:#F4F8FF;">{img_count}</b><br>
+                    <span style="color:#00E5FF;font-weight:900;">🔢 AI ITEMS : {total_count}</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if batch_mode == "Hotspot Detection":
+            st.warning("🔥 Thermal/infrared imagery is recommended for hotspot detection.")
+
+        st.markdown(
+            '<div style="margin-top:14px;margin-bottom:6px;color:#00E5FF;'
+            'font-size:10px;font-weight:900;letter-spacing:1px;">ACTION</div>',
+            unsafe_allow_html=True,
+        )
+        run_batch = st.button(
+            "🚀  RUN ALL FILES",
+            use_container_width=True,
+            key="run_batch_analysis",
+            disabled=(total_count == 0),
+        )
+
+        if total_count:
+            st.caption(f"Ready: {total_count} AI inspection item(s) in one run.")
+
+    if "batch_results" not in st.session_state:
+        st.session_state.batch_results = []
+
+    # ── Bulk analysis engine ───────────────────────────────────
+    if run_batch:
+        all_sources = []
+        results = []
+
+        # Build a lightweight queue first. PDF bytes are retained, but pages are
+        # converted one at a time so large PDFs do not create huge memory spikes.
+        for uf in image_files:
+            if uf.size > MAX_UPLOAD_MB * 1024 * 1024:
+                st.warning(f"⚠️ {uf.name} is larger than {MAX_UPLOAD_MB} MB — skipped.")
+                continue
+            all_sources.append(("image", uf.name, uf.getvalue()))
+
+        for uf in pdf_files:
+            if not _FITZ_AVAILABLE:
+                st.warning("⚠️ PyMuPDF is not installed. PDF files were skipped. Run: pip install pymupdf")
+                continue
+            if uf.size > 100 * 1024 * 1024:
+                st.warning(f"⚠️ {uf.name} is larger than 100 MB — skipped.")
+                continue
+            all_sources.append(("pdf", uf.name, uf.getvalue()))
+
+        # Count exact work items for progress.
+        work_total = 0
+        for kind, name, payload in all_sources:
+            if kind == "image":
+                work_total += 1
+            else:
+                try:
+                    doc = fitz.open(stream=payload, filetype="pdf")
+                    work_total += len(doc)
+                    doc.close()
+                except Exception:
+                    pass
+
+        if work_total == 0:
+            st.error("❌ No readable images or PDF pages found.")
+        else:
+            progress_bar = st.progress(0, text=f"Starting bulk analysis… 0/{work_total}")
+            completed = 0
+
+            for kind, source_name, payload in all_sources:
+                if kind == "image":
+                    file_bytes = np.frombuffer(payload, dtype=np.uint8)
+                    bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                    if bgr is None:
+                        st.warning(f"⚠️ {source_name} could not be read — skipped.")
+                        continue
+
+                    completed += 1
+                    progress_bar.progress(
+                        completed / work_total,
+                        text=f"🧠 Analysing {source_name} ({completed}/{work_total})…",
+                    )
+                    d = analyse_single_image(bgr, batch_mode, batch_conf)
+                    d["label"] = source_name
+                    d["source_file"] = source_name
+                    d["source_type"] = "IMAGE"
+                    d["page_number"] = "-"
+                    d["original_rgb"] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    results.append(d)
+
+                else:
+                    try:
+                        doc = fitz.open(stream=payload, filetype="pdf")
+                        mat = fitz.Matrix(150 / 72, 150 / 72)
+                        page_total = len(doc)
+
+                        for page_index, page in enumerate(doc, 1):
+                            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+                            img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                                pix.height, pix.width, 3
+                            )
+                            bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+
+                            completed += 1
+                            label = f"{source_name} • Page {page_index}"
+                            progress_bar.progress(
+                                completed / work_total,
+                                text=f"🧠 Analysing {label} ({completed}/{work_total})…",
+                            )
+                            d = analyse_single_image(bgr, batch_mode, batch_conf)
+                            d["label"] = label
+                            d["source_file"] = source_name
+                            d["source_type"] = "PDF"
+                            d["page_number"] = page_index
+                            d["original_rgb"] = img_rgb
+                            results.append(d)
+
+                        doc.close()
+                    except Exception as e:
+                        st.warning(f"⚠️ {source_name} could not be processed: {e}")
+
+            progress_bar.progress(
+                1.0,
+                text=f"✅ Bulk analysis complete — {len(results)} item(s) analysed!",
+            )
+            st.session_state.batch_results = results
+            st.rerun()
+
+    # ── Results area ──────────────────────────────────────────
+    with b_results:
+        if st.session_state.batch_results:
+            results = st.session_state.batch_results
+            n = len(results)
+
+            total_defects   = sum(r["total_detections"] for r in results)
+            avg_health      = sum(r["health_numeric"] for r in results) / n
+            worst           = min(results, key=lambda r: r["health_numeric"])
+            best            = max(results, key=lambda r: r["health_numeric"])
+            critical_count  = sum(1 for r in results if r["priority"] == "HIGH")
+
+            if critical_count > 0:
+                overall_status = "🚨 CRITICAL"
+                status_color   = "#FF4757"
+                status_border  = "danger"
+            elif total_defects > 0:
+                overall_status = "⚠️ WARNING"
+                status_color   = "#FFB000"
+                status_border  = "warning"
+            else:
+                overall_status = "✅ HEALTHY"
+                status_color   = "#00FFB0"
+                status_border  = "good"
+
+            # ── Batch Summary Dashboard ───────────────────────
+            st.markdown(
+                f"""
+                <div style="margin-bottom:22px;padding:22px 24px;border-radius:20px;
+                            border:1px solid #1C3350;
+                            background:linear-gradient(135deg,#07121E,#03080E);
+                            border-left:4px solid {status_color};">
+                    <div style="display:flex;align-items:center;justify-content:space-between;
+                                flex-wrap:wrap;gap:14px;">
+                        <div>
+                            <div style="color:#00E5FF;font-size:13px;font-weight:900;
+                                        letter-spacing:1px;">📊 BATCH SUMMARY DASHBOARD</div>
+                            <div style="font-size:11px;color:#718198;margin-top:4px;">
+                                {n} inspection item(s) processed — {batch_mode}
+                            </div>
+                        </div>
+                        <div style="font-size:22px;font-weight:900;color:{status_color};">
+                            {overall_status}
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(4,1fr);
+                                gap:12px;margin-top:18px;">
+                        <div style="background:#0A1622;border:1px solid #1C3350;
+                                    border-radius:14px;padding:16px;text-align:center;">
+                            <div style="color:#78869A;font-size:11px;
+                                        letter-spacing:1px;">IMAGES</div>
+                            <div style="font-size:34px;font-weight:900;color:#F4F8FF;">{n}</div>
+                            <div style="color:#4B5A6A;font-size:11px;">ANALYSED</div>
+                        </div>
+                        <div style="background:#0A1622;border:1px solid #1C3350;
+                                    border-radius:14px;padding:16px;text-align:center;">
+                            <div style="color:#78869A;font-size:11px;
+                                        letter-spacing:1px;">TOTAL DEFECTS</div>
+                            <div style="font-size:34px;font-weight:900;
+                                        color:#FF4757;">{total_defects}</div>
+                            <div style="color:#4B5A6A;font-size:11px;">DETECTED</div>
+                        </div>
+                        <div style="background:#0A1622;border:1px solid #1C3350;
+                                    border-radius:14px;padding:16px;text-align:center;">
+                            <div style="color:#78869A;font-size:11px;
+                                        letter-spacing:1px;">AVG HEALTH</div>
+                            <div style="font-size:34px;font-weight:900;
+                                        color:#00FFB0;">{avg_health:.0f}</div>
+                            <div style="color:#4B5A6A;font-size:11px;">/100</div>
+                        </div>
+                        <div style="background:#0A1622;border:1px solid #1C3350;
+                                    border-radius:14px;padding:16px;text-align:center;">
+                            <div style="color:#78869A;font-size:11px;
+                                        letter-spacing:1px;">CRITICAL</div>
+                            <div style="font-size:34px;font-weight:900;
+                                        color:#FFB000;">{critical_count}</div>
+                            <div style="color:#4B5A6A;font-size:11px;">HIGH-PRIORITY</div>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+                        <div style="background:#060E17;border:1px solid #1A3146;border-radius:12px;
+                                    padding:12px 16px;">
+                            <div style="color:#FF4757;font-size:11px;font-weight:800;">⚠️ WORST PANEL</div>
+                            <div style="color:#EAF2FF;font-size:13px;font-weight:700;margin-top:4px;
+                                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                {worst["label"]}
+                            </div>
+                            <div style="color:#8D9AAC;font-size:11px;margin-top:3px;">
+                                Health: <b style="color:#FF4757;">{worst["health_numeric"]}/100</b> &nbsp;
+                                Defects: <b>{worst["total_detections"]}</b>
+                            </div>
+                        </div>
+                        <div style="background:#060E17;border:1px solid #1A3146;border-radius:12px;
+                                    padding:12px 16px;">
+                            <div style="color:#00FFB0;font-size:11px;font-weight:800;">✅ BEST PANEL</div>
+                            <div style="color:#EAF2FF;font-size:13px;font-weight:700;margin-top:4px;
+                                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                {best["label"]}
+                            </div>
+                            <div style="color:#8D9AAC;font-size:11px;margin-top:3px;">
+                                Health: <b style="color:#00FFB0;">{best["health_numeric"]}/100</b> &nbsp;
+                                Defects: <b>{best["total_detections"]}</b>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # ── Per-image grid thumbnails ─────────────────────
+            st.markdown(
+                '<div style="color:#00E5FF;font-size:13px;font-weight:900;'
+                'letter-spacing:.8px;margin-bottom:10px;">🗂️ PER-IMAGE RESULTS</div>',
+                unsafe_allow_html=True,
+            )
+
+            for i, r in enumerate(results):
+                p_color = {"HIGH": "#FF4757", "MEDIUM": "#FFB000", "LOW": "#00FFB0"}[r["priority"]]
+                with st.expander(
+                    f"{'🚨' if r['priority']=='HIGH' else '⚠️' if r['priority']=='MEDIUM' else '✅'} "
+                    f"{r['label']}  •  Health {r['health_numeric']}/100  "
+                    f"•  {r['total_detections']} defect(s)  •  {r['priority']} priority",
+                    expanded=(i == 0),
+                ):
+                    exp_orig, exp_out = st.columns(2, gap="small")
+
+                    with exp_orig:
+                        st.markdown('<div class="image-title">📸 ORIGINAL</div>', unsafe_allow_html=True)
+                        st.image(r["original_rgb"], use_container_width=True)
+
+                    with exp_out:
+                        st.markdown('<div class="image-title">🤖 AI OUTPUT</div>', unsafe_allow_html=True)
+                        st.image(r["results_img"], use_container_width=True)
+
+                    # Category cards
+                    cc1, cc2, cc3 = st.columns(3, gap="medium")
+                    for col, (icon, title, count, loss, accent, status) in zip(
+                        (cc1, cc2, cc3),
+                        [
+                            ("🧹", "Soiling/Dust",    r["dust_count"],    r["dust_loss"],    "#00E5FF", r["dust_status"]),
+                            ("💥", "Structural Cracks",r["crack_count"],   r["crack_loss"],   "#FF4757", r["crack_status"]),
+                            ("🔥", "Thermal Hotspots", r["hotspot_count"], r["hotspot_loss"], "#FFB000", r["hotspot_status"]),
+                        ]
+                    ):
+                        with col:
+                            st.markdown(
+                                f"""
+                                <div style="padding:14px;border:1px solid #1A3348;border-radius:14px;
+                                            background:#081521;border-top:3px solid {accent};
+                                            margin-top:10px;">
+                                    <div style="font-size:11px;color:{accent};
+                                                font-weight:900;">{icon} {title.upper()}</div>
+                                    <div style="font-size:32px;font-weight:900;
+                                                color:#F4F8FF;margin-top:6px;">{count}</div>
+                                    <div style="font-size:11px;color:#78879A;">REGIONS</div>
+                                    <div style="margin-top:8px;font-size:12px;
+                                                color:#D5DFEA;"><b>Status:</b> {status}</div>
+                                    <div style="font-size:12px;color:#D5DFEA;">
+                                        <b>Impact:</b> {loss:.1f}%</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+
+                    # Metrics row
+                    st.markdown(
+                        f"""
+                        <div style="display:grid;grid-template-columns:repeat(4,1fr);
+                                    gap:10px;margin-top:12px;">
+                            <div style="background:#0A1622;border:1px solid #1C3350;
+                                        border-radius:12px;padding:14px;text-align:center;">
+                                <div style="color:#78869A;font-size:10px;">TOTAL DEFECTS</div>
+                                <div style="font-size:26px;font-weight:900;
+                                            color:#F4F8FF;">{r["total_detections"]}</div>
+                            </div>
+                            <div style="background:#0A1622;border:1px solid #1C3350;
+                                        border-radius:12px;padding:14px;text-align:center;">
+                                <div style="color:#78869A;font-size:10px;">POWER LOSS</div>
+                                <div style="font-size:26px;font-weight:900;
+                                            color:#FFB000;">{r["total_loss"]:.1f}%</div>
+                            </div>
+                            <div style="background:#0A1622;border:1px solid #1C3350;
+                                        border-radius:12px;padding:14px;text-align:center;">
+                                <div style="color:#78869A;font-size:10px;">EFFICIENCY</div>
+                                <div style="font-size:26px;font-weight:900;
+                                            color:#00FFB0;">{r["efficiency"]:.1f}%</div>
+                            </div>
+                            <div style="background:#0A1622;border:1px solid #1C3350;
+                                        border-radius:12px;padding:14px;text-align:center;">
+                                <div style="color:#78869A;font-size:10px;">HEALTH</div>
+                                <div style="font-size:26px;font-weight:900;
+                                            color:{p_color};">{r["health_numeric"]}</div>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    # Region table
+                    if r["detection_details"]:
+                        _iw = r["image_w"] or 1
+                        _ih = r["image_h"] or 1
+                        rows_html = ""
+                        for idx2, item in enumerate(r["detection_details"], 1):
+                            cx = ((item["x1"]+item["x2"])/2)/_iw*100
+                            cy = ((item["y1"]+item["y2"])/2)/_ih*100
+                            rows_html += (
+                                f"<tr><td>{idx2}</td><td><b>{item['type']}</b></td>"
+                                f"<td>{item['confidence']:.2f}</td>"
+                                f"<td>{cx:.0f}% across / {cy:.0f}% down</td>"
+                                f"<td>{item['area_pct']:.2f}%</td></tr>"
+                            )
+                        st.markdown(
+                            f"""
+                            <div style="margin-top:14px;border:1px solid #1A3348;
+                                        border-radius:14px;overflow:hidden;background:#050B12;">
+                                <div style="padding:12px 16px;color:#00E5FF;font-size:13px;
+                                            font-weight:900;border-bottom:1px solid #173047;">
+                                    📍 REGION-BY-REGION DETAILS
+                                </div>
+                                <div style="overflow-x:auto;">
+                                <table style="width:100%;border-collapse:collapse;
+                                             font-size:12px;color:#C9D5E2;">
+                                    <thead><tr style="background:#091724;color:#71869B;text-align:left;">
+                                        <th style="padding:10px;">#</th>
+                                        <th style="padding:10px;">DEFECT TYPE</th>
+                                        <th style="padding:10px;">CONFIDENCE</th>
+                                        <th style="padding:10px;">LOCATION</th>
+                                        <th style="padding:10px;">BOX AREA</th>
+                                    </tr></thead>
+                                    <tbody>{rows_html}</tbody>
+                                </table>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                    # Save individual to history button
+                    if st.button(
+                        f"💾 Save {r['label']} to History",
+                        key=f"save_batch_{i}",
+                    ):
+                        record = {
+                            "Timestamp":        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Filename":         r["label"],
+                            "Inspection_Mode":  batch_mode,
+                            "Dust_Status":      r["dust_status"],
+                            "Crack_Status":     r["crack_status"],
+                            "Hotspot_Status":   r["hotspot_status"],
+                            "Health_Score":     r["health_score"],
+                            "Priority":         r["priority"],
+                            "Detections_Count": r["total_detections"],
+                            "Estimated_Loss_Pct": f'{r["total_loss"]:.1f}%',
+                        }
+                        save_record(record, r["results_img"])
+
+            # ── Combined exports ─────────────────────────────────
+            st.markdown("<br>", unsafe_allow_html=True)
+            export_a, export_b = st.columns(2, gap="small")
+
+            report_rows = []
+            for r in results:
+                report_rows.append({
+                    "Source_File": r.get("source_file", r.get("label", "")),
+                    "Source_Type": r.get("source_type", ""),
+                    "Page": r.get("page_number", "-"),
+                    "Inspection_Mode": batch_mode,
+                    "Dust_Status": r.get("dust_status", ""),
+                    "Crack_Status": r.get("crack_status", ""),
+                    "Hotspot_Status": r.get("hotspot_status", ""),
+                    "Total_Defects": r.get("total_detections", 0),
+                    "Power_Loss_Pct": round(float(r.get("total_loss", 0)), 2),
+                    "Efficiency_Pct": round(float(r.get("efficiency", 0)), 2),
+                    "Health_Score": r.get("health_numeric", 0),
+                    "Priority": r.get("priority", ""),
+                    "Average_Confidence": round(float(r.get("avg_confidence", 0)), 3),
+                })
+            report_df = pd.DataFrame(report_rows)
+
+            with export_a:
+                st.download_button(
+                    "📥 DOWNLOAD CSV REPORT",
+                    data=report_df.to_csv(index=False).encode("utf-8"),
+                    file_name="Super_Six_Bulk_Inspection_Report.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="download_bulk_csv",
+                )
+
+            # Create a ZIP of all annotated AI outputs on demand.
+            import zipfile
+            import io as _io
+            zip_buffer = _io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for idx_zip, r in enumerate(results, 1):
+                    ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(r["results_img"], cv2.COLOR_RGB2BGR))
+                    if ok:
+                        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", r.get("label", f"result_{idx_zip}"))
+                        zf.writestr(f"{idx_zip:04d}_{safe_name}.jpg", encoded.tobytes())
+            zip_buffer.seek(0)
+
+            with export_b:
+                st.download_button(
+                    "🖼️ DOWNLOAD AI OUTPUTS (ZIP)",
+                    data=zip_buffer.getvalue(),
+                    file_name="Super_Six_AI_Outputs.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    key="download_bulk_zip",
+                )
+
+            # ── Clear batch button ────────────────────────────
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️ CLEAR BATCH RESULTS", key="clear_batch"):
+                st.session_state.batch_results = []
+                st.rerun()
+
+        else:
+            st.html("""
+            <div style="text-align:center;padding:60px 20px;border:1px dashed #23415A;
+                        border-radius:20px;background:#050B12;">
+                <div style="font-size:64px;">📄</div>
+                <div style="font-size:18px;font-weight:800;color:#DDE7F3;margin-top:12px;">
+                    Ready for Batch Analysis
+                </div>
+                <div style="color:#6F8299;font-size:13px;margin-top:8px;">
+                    Upload a PDF and/or multiple images in the control panel,
+                    then click <b style="color:#00E5FF;">RUN BATCH ANALYSIS</b>.
+                </div>
+            </div>
+            """)
+
 
 # ============================================================
 # HISTORY
