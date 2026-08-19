@@ -2983,6 +2983,14 @@ with tab_batch:
                         st.warning(f"⚠️ {source_name} could not be read — skipped.")
                         continue
 
+                    # ── Validate: must be a real solar panel image ──
+                    _valid, _reason = is_solar_panel_image(bgr)
+                    if not _valid:
+                        st.warning(
+                            f"⚠️ **{source_name}** skipped — {_reason}"
+                        )
+                        continue
+
                     completed += 1
                     progress_bar.progress(
                         completed / work_total,
@@ -3008,6 +3016,20 @@ with tab_batch:
                                 pix.height, pix.width, 3
                             )
                             bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+
+                            # ── Validate: must be a real solar panel image ──
+                            _valid_pg, _reason_pg = is_solar_panel_image(bgr)
+                            if not _valid_pg:
+                                completed += 1
+                                label = f"{source_name} • Page {page_index}"
+                                progress_bar.progress(
+                                    completed / work_total,
+                                    text=f"⚠️ Skipping {label} (not a panel)…",
+                                )
+                                st.warning(
+                                    f"⚠️ **{label}** skipped — {_reason_pg}"
+                                )
+                                continue
 
                             completed += 1
                             label = f"{source_name} • Page {page_index}"
