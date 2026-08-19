@@ -4,5 +4,4 @@ ultralytics
 pandas
 numpy
 Pillow
-PyMuPDF
-roboflow
+pymupdf
