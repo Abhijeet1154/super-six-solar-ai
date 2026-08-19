@@ -42,9 +42,24 @@ IMAGE_DIR = "saved_images"
 LOGO_FILE = "logo.png"
 
 MODEL_FILES = {
-    "dust": "dust_model.pt",
-    "crack": "crack_model.pt",
-    "hotspot": "hotspot_model.pt",
+    "dust":            "dust_model.pt",
+    "crack":           "crack_model.pt",
+    "hotspot":         "hotspot_model.pt",
+    "panel_condition": "panel_condition_model.pt",  # Panel condition / deactivation model
+}
+
+# ── Panel Condition class colours (BGR) ──────────────────────
+PC_CLASS_COLORS = {
+    "Non-Defective":    (118, 230, 0),    # Green
+    "Dusty":            (0,   190, 255),  # Yellow
+    "Defective":        (80,  60,  255),  # Red
+    "Physical-Damage":  (30,  100, 255),  # Orange-Red
+    "Electrical-Damage":(255, 80,  180),  # Purple
+    "Bird-drop":        (40,  80,  120),  # Brown
+    "Snow":             (255, 220, 0),    # Cyan
+}
+PC_DEFECTIVE_CLASSES = {
+    "Defective", "Physical-Damage", "Electrical-Damage", "Bird-drop", "Snow", "Dusty"
 }
 
 # ── Estimation constants (single source of truth) ─────────────
@@ -1082,6 +1097,54 @@ initialize_storage()
 
 
 # ============================================================
+# STRICT SOLAR PANEL IMAGE VALIDATOR (COLOR-BLIND & BULLETPROOF)
+# ============================================================
+
+def is_solar_panel_image(bgr_img: np.ndarray) -> tuple[bool, str]:
+    """Strict Validation using panel_condition AI model as primary gatekeeper."""
+
+    global models
+
+    # ── PRIMARY CHECK: panel_condition YOLO model ────────────────
+    # Run at very low confidence (0.12) so even partially visible panels
+    # are accepted, but non-panel images (flowers, sky, etc.) return 0 boxes.
+    if "models" in globals() and models.get("panel_condition"):
+        try:
+            pc_result = models["panel_condition"](
+                bgr_img, conf=0.12, verbose=False
+            )[0]
+            if len(pc_result.boxes) > 0:
+                # At least one solar-panel class found → definitely a panel
+                return True, "Solar panel confirmed by AI model."
+            else:
+                # Model found NOTHING → not a solar panel image
+                return (
+                    False,
+                    "No solar panel detected in this image. "
+                    "Please upload a real solar panel photograph.",
+                )
+        except Exception:
+            pass  # Model failed — fall back to OpenCV
+
+    # ── FALLBACK: OpenCV geometry check (only if model unavailable) ──
+    gray      = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
+    sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+    edges     = cv2.Canny(gray, 50, 150)
+    lines     = cv2.HoughLinesP(
+        edges, 1, np.pi / 180, threshold=40, minLineLength=40, maxLineGap=10
+    )
+    num_lines = len(lines) if lines is not None else 0
+
+    if sharpness < 50 and num_lines < 5:
+        return False, "Image appears to be a solid color or abstract gradient."
+
+    if num_lines >= 20:           # Much stricter — needs dense grid lines
+        return True, "Geometric grid structure detected."
+
+    return False, "No distinct solar panel geometry detected."
+
+
+# ============================================================
 # MODEL LOADING
 # ============================================================
 
@@ -1192,6 +1255,30 @@ def analyse_single_image(bgr, mode, conf):
         else:
             hotspot_status = "MODEL MISSING"
 
+    # ── Panel Condition ──────────────────────────────────────
+    panel_condition_findings = []
+    pc_model = models.get("panel_condition")
+    if pc_model is not None:
+        pc_result = pc_model(bgr, conf=conf, verbose=False)[0]
+        class_names = pc_result.names
+        for box in pc_result.boxes:
+            c = float(box.conf[0])
+            cls_id = int(box.cls[0])
+            cls_name = class_names.get(cls_id, str(cls_id))
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            area_pct = max(0,x2-x1)*max(0,y2-y1)/max(1,image_w*image_h)*100
+            panel_condition_findings.append({
+                "class": cls_name, "confidence": c,
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "area_pct": area_pct
+            })
+            color = PC_CLASS_COLORS.get(cls_name, (200, 200, 200))
+            cv2.rectangle(output_bgr, (x1, y1), (x2, y2), color, 2)
+            short_label = cls_name.upper().replace("-", "-")[:12]
+            cv2.putText(output_bgr, f"{short_label} {c:.2f}",
+                        (x1, max(25, y1 - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
+
     # ── Scoring ─────────────────────────────────────────────
     dust_loss    = min(dust_count    * DUST_LOSS_PER,    DUST_LOSS_MAX)
     crack_loss   = min(crack_count   * CRACK_LOSS_PER,   CRACK_LOSS_MAX)
@@ -1215,27 +1302,28 @@ def analyse_single_image(bgr, mode, conf):
     output_rgb = cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
 
     return {
-        "results_img":        output_rgb,
-        "total_detections":   total_detections,
-        "dust_count":         dust_count,
-        "crack_count":        crack_count,
-        "hotspot_count":      hotspot_count,
-        "dust_status":        dust_status,
-        "crack_status":       crack_status,
-        "hotspot_status":     hotspot_status,
-        "dust_loss":          dust_loss,
-        "crack_loss":         crack_loss,
-        "hotspot_loss":       hotspot_loss,
-        "total_loss":         total_loss,
-        "efficiency":         efficiency,
-        "health_numeric":     health_numeric,
-        "health_score":       f"{health_numeric}/100",
-        "priority":           priority,
-        "avg_confidence":     avg_confidence,
-        "highest_confidence": highest_confidence,
-        "detection_details":  detection_details,
-        "image_w":            image_w,
-        "image_h":            image_h,
+        "results_img":              output_rgb,
+        "total_detections":         total_detections,
+        "dust_count":               dust_count,
+        "crack_count":              crack_count,
+        "hotspot_count":            hotspot_count,
+        "dust_status":              dust_status,
+        "crack_status":             crack_status,
+        "hotspot_status":           hotspot_status,
+        "dust_loss":                dust_loss,
+        "crack_loss":               crack_loss,
+        "hotspot_loss":             hotspot_loss,
+        "total_loss":               total_loss,
+        "efficiency":               efficiency,
+        "health_numeric":           health_numeric,
+        "health_score":             f"{health_numeric}/100",
+        "priority":                 priority,
+        "avg_confidence":           avg_confidence,
+        "highest_confidence":       highest_confidence,
+        "detection_details":        detection_details,
+        "panel_condition_findings": panel_condition_findings,
+        "image_w":                  image_w,
+        "image_h":                  image_h,
     }
 
 
@@ -1580,8 +1668,8 @@ with tab_inspect:
         """)
 
     # ========================================================
-    # ORIGINAL AI ANALYSIS ENGINE — PRESERVED
-# ========================================================
+    # ORIGINAL AI ANALYSIS ENGINE
+    # ========================================================
     if run_analysis:
 
         # ── Guard: image must be uploaded ────────────────────────
@@ -1596,6 +1684,16 @@ with tab_inspect:
             st.error(
                 f"❌ File too large ({uploaded_file.size / 1024 / 1024:.1f} MB). "
                 f"Max allowed size is {MAX_UPLOAD_MB} MB."
+            )
+            st.stop()
+
+        # ── Guard: verify this looks like a solar panel image ────────
+        _valid_panel, _reason = is_solar_panel_image(original_bgr)
+        if not _valid_panel:
+            st.error(
+                f"❌ **Invalid Image** — {_reason}\n\n"
+                "Please upload a clear photograph of a **solar panel** "
+                "(not sky, water, or other plain-coloured images)."
             )
             st.stop()
 
@@ -1894,6 +1992,68 @@ with tab_inspect:
 
 
             # ============================================
+            # PANEL CONDITION MODEL
+            # ============================================
+
+            panel_condition_findings = []
+            pc_model = models.get("panel_condition")
+
+            if pc_model is not None:
+
+                pc_result = pc_model(
+                    original_bgr,
+                    conf=confidence_threshold,
+                    verbose=False,
+                )[0]
+
+                pc_class_names = pc_result.names
+
+                for box in pc_result.boxes:
+
+                    conf_val = float(box.conf[0])
+                    cls_id   = int(box.cls[0])
+                    cls_name = pc_class_names.get(cls_id, str(cls_id))
+
+                    x1, y1, x2, y2 = map(
+                        int, box.xyxy[0].tolist()
+                    )
+
+                    region_area_pct = (
+                        max(0, x2 - x1) * max(0, y2 - y1)
+                        / max(1, image_w * image_h)
+                        * 100.0
+                    )
+
+                    panel_condition_findings.append({
+                        "class":      cls_name,
+                        "confidence": conf_val,
+                        "x1": x1, "y1": y1,
+                        "x2": x2, "y2": y2,
+                        "area_pct":   region_area_pct,
+                    })
+
+                    color = PC_CLASS_COLORS.get(
+                        cls_name, (200, 200, 200)
+                    )
+
+                    cv2.rectangle(
+                        output_bgr,
+                        (x1, y1), (x2, y2),
+                        color, 2,
+                    )
+
+                    short_label = cls_name.upper()[:12]
+
+                    cv2.putText(
+                        output_bgr,
+                        f"{short_label} {conf_val:.2f}",
+                        (x1, max(25, y1 - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65, color, 2, cv2.LINE_AA,
+                    )
+
+
+            # ============================================
             # CALCULATIONS
             # ============================================
 
@@ -2030,8 +2190,8 @@ with tab_inspect:
                     highest_confidence,
                 "detection_details":
                     detection_details,
-                # Store image dimensions so the report can use
-                # them without relying on locals() or re-decoding.
+                "panel_condition_findings":
+                    panel_condition_findings,
                 "image_w":
                     image_w,
                 "image_h":
@@ -2087,8 +2247,6 @@ with tab_inspect:
                 unsafe_allow_html=True,
             )
 
-            # Category-level findings. These values come directly from the model counts
-            # and the existing loss calculation in the application.
             category_cards = [
                 ("🧹", "Soiling / Dust", data["dust_count"], dust_loss, "#00E5FF", data["dust_status"]),
                 ("💥", "Structural Cracks", data["crack_count"], crack_loss, "#FF4757", data["crack_status"]),
@@ -2111,10 +2269,80 @@ with tab_inspect:
                         unsafe_allow_html=True,
                     )
 
-            # Region-by-region details are available when the YOLO model returns boxes.
+            # ── Panel Condition AI Card ──────────────────────────
+            pc_findings = data.get("panel_condition_findings", [])
+            if pc_findings:
+                # Separate defective vs clean
+                defective_finds = [f for f in pc_findings if f["class"] in PC_DEFECTIVE_CLASSES]
+                clean_finds     = [f for f in pc_findings if f["class"] == "Non-Defective"]
+
+                # Build tag HTML for each finding
+                tag_colors = {
+                    "Non-Defective":    ("#00FFB0", "#002E1A"),
+                    "Dusty":            ("#FFD700", "#201800"),
+                    "Defective":        ("#FF4757", "#200008"),
+                    "Physical-Damage":  ("#FF6B35", "#1F0900"),
+                    "Electrical-Damage":("#B47AFF", "#150025"),
+                    "Bird-drop":        ("#A07850", "#150A00"),
+                    "Snow":             ("#00E5FF", "#001820"),
+                }
+                tag_html = ""
+                for f in pc_findings:
+                    fg, bg = tag_colors.get(f["class"], ("#AAB7C8", "#111"))
+                    tag_html += (
+                        f'<span style="display:inline-block;margin:3px 4px;padding:4px 10px;'
+                        f'border-radius:99px;background:{bg};border:1px solid {fg};'
+                        f'color:{fg};font-size:11px;font-weight:700;">'
+                        f'{f["class"]} {f["confidence"]:.2f}</span>'
+                    )
+
+                overall_label = (
+                    "✅ PANEL ACTIVE — No Critical Issues"
+                    if not defective_finds
+                    else f"🚨 PANEL CONDITION ALERT — {len(defective_finds)} Issue(s) Found"
+                )
+                overall_color = "#00FFB0" if not defective_finds else "#FF4757"
+
+                st.markdown(
+                    f"""
+                    <div style="margin-top:18px;padding:18px;border:1px solid #1A3348;
+                                border-radius:16px;background:linear-gradient(145deg,#081521,#050B12);
+                                border-top:3px solid {overall_color};">
+                        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                            <div>
+                                <div style="font-size:12px;color:{overall_color};font-weight:900;
+                                            letter-spacing:.6px;">🧩 PANEL CONDITION AI</div>
+                                <div style="font-size:22px;font-weight:900;color:#F4F8FF;
+                                            margin-top:6px;">{overall_label}</div>
+                                <div style="font-size:11px;color:#78879A;margin-top:3px;">
+                                    {len(pc_findings)} detection(s) &nbsp;•&nbsp;
+                                    {len(clean_finds)} clean &nbsp;•&nbsp;
+                                    {len(defective_finds)} defective
+                                </div>
+                            </div>
+                            <div style="font-size:36px;">
+                                {'✅' if not defective_finds else '⚠️'}
+                            </div>
+                        </div>
+                        <div style="margin-top:14px;">{tag_html}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            elif models.get("panel_condition") is not None:
+                st.markdown(
+                    """
+                    <div style="margin-top:18px;padding:14px 16px;border:1px solid #1A3348;
+                                border-radius:14px;background:#06111C;color:#748599;font-size:12px;">
+                        🧩 <b style="color:#00E5FF;">Panel Condition AI</b>: No detections above
+                        the confidence threshold. Try lowering the slider.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
             if details:
                 rows = []
-                # Use image dimensions stored in session_state (no locals() hack)
                 _iw = data.get("image_w") or 1
                 _ih = data.get("image_h") or 1
                 for idx, item in enumerate(details, 1):
@@ -2142,14 +2370,13 @@ with tab_inspect:
                     unsafe_allow_html=True,
                 )
 
-            # Explain what the numbers mean rather than only displaying them.
             interpretation = []
             if data["dust_count"]:
-                interpretation.append(f"<b>Soiling:</b> {data["dust_count"]} region(s) detected; the current model calculation assigns {dust_loss:.1f}% estimated loss contribution.")
+                interpretation.append(f"<b>Soiling:</b> {data['dust_count']} region(s) detected; the current model calculation assigns {dust_loss:.1f}% estimated loss contribution.")
             if data["crack_count"]:
-                interpretation.append(f"<b>Cracks:</b> {data["crack_count"]} region(s) detected; the current model calculation assigns {crack_loss:.1f}% estimated loss contribution.")
+                interpretation.append(f"<b>Cracks:</b> {data['crack_count']} region(s) detected; the current model calculation assigns {crack_loss:.1f}% estimated loss contribution.")
             if data["hotspot_count"]:
-                interpretation.append(f"<b>Hotspots:</b> {data["hotspot_count"]} region(s) detected; the current model calculation assigns {hotspot_loss:.1f}% estimated loss contribution.")
+                interpretation.append(f"<b>Hotspots:</b> {data['hotspot_count']} region(s) detected; the current model calculation assigns {hotspot_loss:.1f}% estimated loss contribution.")
             if not interpretation:
                 interpretation.append("No defect regions were returned above the selected confidence threshold.")
 
@@ -2492,7 +2719,7 @@ with tab_inspect:
                             ),
 
                         "Filename":
-                            uploaded_file.name,
+                            uploaded_file.name if uploaded_file else "Unknown",
 
                         "Inspection_Mode":
                             inspection_mode,

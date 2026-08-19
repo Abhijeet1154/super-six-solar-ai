@@ -15,3 +15,7 @@ runs/
 
 # Agent/local files
 .agents/
+
+# Local embed / large folders
+python313_embed/
+python313_embed.zip
